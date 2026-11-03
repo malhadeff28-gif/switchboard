@@ -16,7 +16,7 @@ No npm dependencies or installation are required. You need Codex CLI and/or Clau
 
 ## Use on another computer
 
-Sign in to GitHub with an account that can access this private repository, then clone it:
+Clone the repository:
 
 ```sh
 git clone https://github.com/malhadeff28-gif/switchboard.git
@@ -26,7 +26,7 @@ npm start
 
 Install Node.js 20 or later before running these commands. Open http://127.0.0.1:4317 after the server starts. Install and sign in to Codex CLI and/or Claude Code on that computer to use live agents. Existing-chat auto-switch also requires the Codex desktop app on macOS; configure its queue at http://127.0.0.1:4317/desktop.
 
-GitHub stores the app's source code. Chat history, ideas, queue settings, browser drafts, and provider sign-ins stay on each computer and are not synced by this repository. The private repository can be viewed from any device signed into your GitHub account. Running Switchboard from a phone or tablet would require a separate hosted or remote-access implementation; this version runs locally on a computer.
+GitHub stores the app's source code. Chat history, ideas, queue settings, browser drafts, and provider sign-ins stay on each computer and are not synced by this repository. Running Switchboard from a phone or tablet would require a separate hosted or remote-access implementation; this version runs locally on a computer.
 
 ## What works
 
