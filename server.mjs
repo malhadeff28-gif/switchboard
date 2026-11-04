@@ -65,11 +65,12 @@ async function checkConnections(){
   await Promise.all(providers.map(provider=>new Promise(resolve=>{
     const binary=binaries[provider];
     if(!binary){connections[provider]={installed:false,signedIn:false};return resolve();}
-    const child=spawn(binary,provider==='codex'?['login','status']:['auth','status'],{env:commandEnv,stdio:['ignore','pipe','pipe']});
-    let stdout='',stderr='';const timer=setTimeout(()=>child.kill(),6000);
+    const connectionError=`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and restart Switchboard.`;
+    let child;try{child=spawn(binary,provider==='codex'?['login','status']:['auth','status'],{env:commandEnv,stdio:['ignore','pipe','pipe']});}catch{connections[provider]={installed:true,signedIn:false,connectionError};return resolve();}
+    let stdout='',stderr='',failed=false;const timer=setTimeout(()=>child.kill(),6000);
     child.stdout.on('data',b=>{stdout+=b;});child.stderr.on('data',b=>{stderr+=b;});
-    child.on('error',()=>{clearTimeout(timer);connections[provider]={installed:true,signedIn:false,loginError:authErrors.get(provider)||''};resolve();});
-    child.on('close',code=>{clearTimeout(timer);let signedIn=false;try{signedIn=provider==='claude'?JSON.parse(stdout || stderr).loggedIn===true:code===0 && /logged in/i.test(stdout+'\n'+stderr);}catch{}
+    child.on('error',()=>{failed=true;clearTimeout(timer);connections[provider]={installed:true,signedIn:false,connectionError,loginError:authErrors.get(provider)||''};resolve();});
+    child.on('close',code=>{if(failed)return;clearTimeout(timer);let signedIn=false;try{signedIn=provider==='claude'?JSON.parse(stdout || stderr).loggedIn===true:code===0 && /logged in/i.test(stdout+'\n'+stderr);}catch{}
       connections[provider]={installed:true,signedIn,signingIn:authJobs.has(provider),instructions:authJobs.get(provider)?.instructions || '',loginError:authErrors.get(provider)||''};resolve();});
   })));
   publish();return connections;
@@ -89,10 +90,11 @@ function run(chat,text,requestId){
   if(!chat.demo && !connections[provider]?.signedIn)throw new Error(`Sign into ${provider==='codex'?'Codex':'Claude'} in Connections first.`);
   validCwd(chat.cwd);
   const prompt=agentPrompt(chat,text,provider);
+  // Spawn before mutating the project so a synchronous OS error preserves the draft.
+  let child;if(!chat.demo)try{child=spawn(binaries[provider],cliArgs(provider,chat),{cwd:chat.cwd,env:commandEnv,detached:true,stdio:['pipe','pipe','pipe']});}catch{throw new Error(`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and restart Switchboard.`);}
   chat.messages.push({id:randomUUID(),role:'user',provider,text,at:Date.now()});
   chat.lastRequestId=requestId;chat.error=null;chat.status='running';chat.activity='Starting your agent';chat.liveText='';chat.startedAt=Date.now();update({immediate:true});
   if(chat.demo){const timer=setTimeout(()=>{jobs.delete(chat.id);complete(chat,`Here is a direction we can build on: ${text}\n\nThis is a simulated response so you can try the handoff.\n\n<<<SWITCHBOARD_HANDOFF>>>${JSON.stringify({summary:'The demo agent finished. Your project is ready for another decision.',decisions:[],next_action:'Try another prompt or mark this chat caught up.'})}`);},2800);jobs.set(chat.id,{demo:true,timer});return {nextId:nextAttention(state.chats,chat.id)};}
-  const child=spawn(binaries[provider],cliArgs(provider,chat),{cwd:chat.cwd,env:commandEnv,detached:true,stdio:['pipe','pipe','pipe']});
   const job={child,stopped:false,settled:false};jobs.set(chat.id,job);
   let buffer='',stderr='',messages=[],failure='',final='',sessionCandidate='';
   const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';killGroup(child);},20*60*1000);

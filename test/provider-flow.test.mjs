@@ -54,5 +54,8 @@ let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+
   await post(`/api/chats/${chat.id}/update`,{provider:'claude'});c=await turn(chat.id,'Recall the code');assert.match(c.messages.at(-1).text,/blue-otter-147 resumed/);
   const second=(await post('/api/chats',{title:'Auth error',cwd:project,provider:'claude'})).chat;c=await turn(second.id,'FORCE_AUTH_FAILURE');assert.match(c.error,/OAuth session expired/);assert.equal(c.sessions.claude,undefined);
   await post(`/api/chats/${chat.id}/reset-session`,{});c=(await get()).chats.find(x=>x.id===chat.id);assert.equal(c.sessions.claude,undefined);assert.equal(c.sessions.codex,'codex-session');assert.ok(c.messages.length>0);c=await turn(chat.id,'Recall the code');assert.match(c.messages.at(-1).text,/blue-otter-147 new/);
+  // A broken native binary must not crash the whole local workspace.
+  await writeFile(claude,'not an executable program',{mode:0o755});
+  const refreshed=await post('/api/connections/refresh',{});assert.equal(refreshed.claude.signedIn,false);assert.match(refreshed.claude.connectionError,/Could not start Claude Code/);assert.ok((await get()).chats.length);
  }finally{if(child.exitCode===null){child.kill('SIGTERM');await new Promise(resolve=>child.once('exit',resolve));}await rm(dir,{recursive:true,force:true});}
 });
