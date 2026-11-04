@@ -128,11 +128,11 @@ function complete(chat,answer,error){const handoff=parseHandoff(answer);if(hando
   chat.status='ready';chat.readyAt=Date.now();chat.liveText='';chat.activity='';chat.error=error||null;update({immediate:true});}
 async function login(provider){validProvider(provider);if(!binaries[provider])throw new Error(`Install ${provider==='codex'?'Codex CLI':'Claude Code'} first.`);if(authJobs.has(provider))return;
   authErrors.delete(provider);
-  const child=spawn(binaries[provider],provider==='codex'?['login','--device-auth']:['auth','login'],{env:commandEnv,stdio:['ignore','pipe','pipe'],detached:true});
+  const child=spawn(binaries[provider],provider==='codex'?['login','--device-auth']:['auth','login'],{env:commandEnv,stdio:['pipe','pipe','pipe'],detached:true});
   const job={child,instructions:'Opening the provider’s secure sign-in flow…',settled:false,timedOut:false};authJobs.set(provider,job);
   const timer=setTimeout(()=>{job.timedOut=true;killGroup(child);},10*60*1000);
   const output=chunk=>{job.instructions=(job.instructions+'\n'+chunk.toString().replace(/\x1b\[[0-9;]*m/g,'')).slice(-6000);connections[provider]={...connections[provider],signingIn:true,instructions:job.instructions,loginError:''};publish();};
-  child.stdout.on('data',output);child.stderr.on('data',output);
+  child.stdout.on('data',output);child.stderr.on('data',output);child.stdin.on('error',()=>{});
   const finish=(code,error)=>{if(job.settled)return;job.settled=true;clearTimeout(timer);authJobs.delete(provider);
     if(error || code!==0){const command=provider==='codex'?'codex login':'claude auth login';authErrors.set(provider,`${job.timedOut?'Sign-in timed out':'Sign-in did not finish'}. Try again here, or run ${command} in a terminal.`);}
     checkConnections();};
@@ -172,6 +172,14 @@ const server=http.createServer(async(req,res)=>{
       }
       if(route==='/api/connections/refresh'){await checkConnections();send(res,200,connections);return;}
       if(route==='/api/connections/login'){await login(data.provider);send(res,200,{ok:true});return;}
+      if(route==='/api/connections/code'){
+        const provider=validProvider(data.provider),job=authJobs.get(provider);
+        if(!job || job.settled || job.child.stdin.destroyed)throw new Error('No sign-in is waiting for a code. Start sign-in again.');
+        if(typeof data.code!=='string'||!data.code.trim()||data.code.length>2048||/[\r\n]/.test(data.code))throw new Error('Enter a single authorization code.');
+        await new Promise((resolve,reject)=>job.child.stdin.write(data.code.trim()+'\n',error=>error?reject(new Error('Could not send the code. Start sign-in again.')):resolve()));
+        send(res,200,{ok:true});return;
+      }
+
       if(route==='/api/chats'){
         const title=string(data.title,200);if(!title)throw new Error('Give your project a name.');
         const chat=newChat({title,goal:string(data.goal||''),cwd:validCwd(data.cwd||root),provider:validProvider(data.provider)});state.chats.push(chat);update({immediate:true});send(res,201,{chat});return;
