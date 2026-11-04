@@ -18,7 +18,7 @@ let state={chats:[],ideas:[]};
 if (existsSync(stateFile)) {try{state=JSON.parse(readFileSync(stateFile,'utf8'));}catch{throw new Error('Workspace data could not be read. Preserve .local/workspace.json before repairing it.');}}
 state.usage ||= {};
 state.desktop ||= {enabled:false,queue:state.chats.filter(c=>c.sourceId?.startsWith('codex:')).map(c=>c.sourceId),monitorAll:true,emptyBehavior:'brainstorm',history:[]};
-const clients=new Set(), jobs=new Map(), authJobs=new Map();
+const clients=new Set(), jobs=new Map(), authJobs=new Map(), authErrors=new Map();
 const token=randomBytes(32).toString('hex');
 const port=Number(process.env.PORT || 4317);
 const commandEnv={...process.env,PATH:[path.dirname(process.execPath),process.env.PATH || ''].join(path.delimiter)};
@@ -66,11 +66,11 @@ async function checkConnections(){
     const binary=binaries[provider];
     if(!binary){connections[provider]={installed:false,signedIn:false};return resolve();}
     const child=spawn(binary,provider==='codex'?['login','status']:['auth','status'],{env:commandEnv,stdio:['ignore','pipe','pipe']});
-    let output='';const timer=setTimeout(()=>child.kill(),6000);
-    child.stdout.on('data',b=>{output+=b;});child.stderr.on('data',b=>{output+=b;});
-    child.on('error',()=>{clearTimeout(timer);connections[provider]={installed:true,signedIn:false};resolve();});
-    child.on('close',code=>{clearTimeout(timer);let signedIn=false;try{signedIn=provider==='claude'?JSON.parse(output).loggedIn===true:code===0 && /logged in/i.test(output);}catch{}
-      connections[provider]={installed:true,signedIn,signingIn:authJobs.has(provider),instructions:authJobs.get(provider)?.instructions || ''};resolve();});
+    let stdout='',stderr='';const timer=setTimeout(()=>child.kill(),6000);
+    child.stdout.on('data',b=>{stdout+=b;});child.stderr.on('data',b=>{stderr+=b;});
+    child.on('error',()=>{clearTimeout(timer);connections[provider]={installed:true,signedIn:false,loginError:authErrors.get(provider)||''};resolve();});
+    child.on('close',code=>{clearTimeout(timer);let signedIn=false;try{signedIn=provider==='claude'?JSON.parse(stdout || stderr).loggedIn===true:code===0 && /logged in/i.test(stdout+'\n'+stderr);}catch{}
+      connections[provider]={installed:true,signedIn,signingIn:authJobs.has(provider),instructions:authJobs.get(provider)?.instructions || '',loginError:authErrors.get(provider)||''};resolve();});
   })));
   publish();return connections;
 }
@@ -123,12 +123,16 @@ function complete(chat,answer,error){const handoff=parseHandoff(answer);if(hando
   if(answer && !error){chat.summary=handoff.summary;chat.nextAction=handoff.nextAction;chat.decisions=[...new Set([...chat.decisions,...handoff.decisions])].slice(-30);}
   chat.status='ready';chat.readyAt=Date.now();chat.liveText='';chat.activity='';chat.error=error||null;update({immediate:true});}
 async function login(provider){validProvider(provider);if(!binaries[provider])throw new Error(`Install ${provider==='codex'?'Codex CLI':'Claude Code'} first.`);if(authJobs.has(provider))return;
+  authErrors.delete(provider);
   const child=spawn(binaries[provider],provider==='codex'?['login','--device-auth']:['auth','login'],{env:commandEnv,stdio:['ignore','pipe','pipe'],detached:true});
-  const job={child,instructions:'Opening the provider’s secure sign-in flow…'};authJobs.set(provider,job);
-  const timer=setTimeout(()=>killGroup(child),10*60*1000);
-  const output=chunk=>{job.instructions=(job.instructions+'\n'+chunk.toString().replace(/\x1b\[[0-9;]*m/g,'')).slice(-6000);connections[provider]={...connections[provider],signingIn:true,instructions:job.instructions};publish();};
+  const job={child,instructions:'Opening the provider’s secure sign-in flow…',settled:false,timedOut:false};authJobs.set(provider,job);
+  const timer=setTimeout(()=>{job.timedOut=true;killGroup(child);},10*60*1000);
+  const output=chunk=>{job.instructions=(job.instructions+'\n'+chunk.toString().replace(/\x1b\[[0-9;]*m/g,'')).slice(-6000);connections[provider]={...connections[provider],signingIn:true,instructions:job.instructions,loginError:''};publish();};
   child.stdout.on('data',output);child.stderr.on('data',output);
-  const finish=()=>{clearTimeout(timer);authJobs.delete(provider);checkConnections();};child.on('error',finish);child.on('close',finish);await checkConnections();
+  const finish=(code,error)=>{if(job.settled)return;job.settled=true;clearTimeout(timer);authJobs.delete(provider);
+    if(error || code!==0){const command=provider==='codex'?'codex login':'claude auth login';authErrors.set(provider,`${job.timedOut?'Sign-in timed out':'Sign-in did not finish'}. Try again here, or run ${command} in a terminal.`);}
+    checkConnections();};
+  child.on('error',error=>finish(null,error));child.on('close',code=>finish(code));await checkConnections();
 }
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 async function body(req){let data='';for await(const b of req){data+=b;if(data.length>100000)throw new Error('Request is too large.');}try{return JSON.parse(data||'{}');}catch{throw new Error('Invalid JSON.');}}

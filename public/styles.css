@@ -8,3 +8,5 @@
 .native-link{font-size:10px;color:#789268;border:1px solid #d5e1cc;border-radius:5px;padding:7px 10px;white-space:nowrap}.native-link:hover{background:#edf4e5}@media(max-width:600px){.top-title{display:none}.native-link{font-size:9px;padding:6px}.top-controls{gap:6px}}
 
 .usage-shortcut{font-size:10px;color:#5f7856;border:1px solid #d5e1cc;border-radius:5px;padding:7px 9px}.usage-shortcut:hover{background:#edf4e5}.usage-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.usage-form{border:1px solid #dce4d3;border-radius:8px;background:white;padding:16px}.usage-form strong{font-size:14px;font-weight:500}.usage-form p{font-size:10px;line-height:1.6;color:#87977a;min-height:30px}.usage-form label{margin-top:15px}.usage-actions{display:flex;align-items:center;gap:18px}.usage-actions .primary-button{margin:0}@media(max-width:600px){.usage-grid{grid-template-columns:1fr}.usage-form p{min-height:0}.mobile-nav{flex-wrap:wrap}.project-meta{gap:8px}}
+
+.connection-card .connection-error{width:100%;color:#8a4b32;line-height:1.6;font-size:11px}

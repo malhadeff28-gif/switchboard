@@ -15,7 +15,8 @@ test('provider process flow carries context, resumes sessions, and discards fail
  const fixture='#!/usr/bin/env node\n'+String.raw`
 const provider=process.argv[1].includes('codex')?'codex':'claude';
 const args=process.argv.slice(2);
-if(args.includes('status')) {if(provider==='codex') console.log('Logged in using ChatGPT');else console.log(JSON.stringify({loggedIn:true}));process.exit(0);}
+if(args.includes('status')) {if(provider==='codex') console.log('Logged in using ChatGPT');else {console.error('Harmless status warning');console.log(JSON.stringify({loggedIn:true}));}process.exit(0);}
+if(provider==='claude'&&args.includes('auth')&&args.includes('login')){const fs=require('node:fs');const marker=process.argv[1]+'.login';if(!fs.existsSync(marker)){fs.writeFileSync(marker,'retry');console.error('sensitive temporary code');process.exit(1);}process.exit(0);}
 let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+=s);process.stdin.on('end',()=>{
  const emit=o=>console.log(JSON.stringify(o));
  const bad=input.includes('FORCE_AUTH_FAILURE');
@@ -39,6 +40,13 @@ let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+
  try{
   let initial;for(let i=0;i<100;i++){try{initial=await get();break;}catch{await delay(40);}}
   assert.ok(initial,errors);token=initial.token;assert.equal(initial.connections.codex.signedIn,true);assert.equal(initial.connections.claude.signedIn,true);
+  await post('/api/connections/login',{provider:'claude'});let connection;
+  for(let i=0;i<100;i++){await delay(40);connection=(await get()).connections.claude;if(!connection.signingIn&&connection.loginError)break;}
+  assert.match(connection.loginError,/Sign-in did not finish/);assert.doesNotMatch(connection.loginError,/sensitive temporary code/);assert.equal(connection.signedIn,true);
+  await post('/api/connections/login',{provider:'claude'});
+  for(let i=0;i<100;i++){await delay(40);connection=(await get()).connections.claude;if(!connection.signingIn&&!connection.loginError)break;}
+  assert.equal(connection.loginError,'');assert.equal(connection.signedIn,true);
+
   const {chat}=await post('/api/chats',{title:'Test',goal:'test',cwd:project,provider:'codex'});
   let c=await turn(chat.id,'Remember blue-otter-147');assert.match(c.messages.at(-1).text,/blue-otter-147 new/);assert.equal(c.nextAction,'Choose the next step');assert.deepEqual(c.decisions,['Use the blue plan']);assert.equal(c.sessions.codex,'codex-session');
   await post(`/api/chats/${chat.id}/update`,{provider:'claude'});c=await turn(chat.id,'Recall the code');assert.match(c.messages.at(-1).text,/blue-otter-147 new/);assert.equal(c.sessions.claude,'claude-session');
