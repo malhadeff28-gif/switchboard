@@ -21,12 +21,12 @@ state.desktop ||= {enabled:false,queue:state.chats.filter(c=>c.sourceId?.startsW
 const clients=new Set(), jobs=new Map(), authJobs=new Map();
 const token=randomBytes(32).toString('hex');
 const port=Number(process.env.PORT || 4317);
-const commandEnv={...process.env,PATH:`${path.dirname(process.execPath)}:${process.env.PATH || ''}`};
+const commandEnv={...process.env,PATH:[path.dirname(process.execPath),process.env.PATH || ''].join(path.delimiter)};
 const binaries={};
 for (const provider of providers) {
   const override=process.env[`SWITCHBOARD_${provider.toUpperCase()}_BIN`];
-  const candidates=[override, ...((commandEnv.PATH || '').split(':').map(p=>path.join(p,provider))),
-    ...(provider==='codex' ? ['/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex','/Applications/Codex.app/Contents/Resources/codex'] : [path.join(os.homedir(),'.local/bin/claude')])];
+  const candidates=[override, ...((commandEnv.PATH || '').split(path.delimiter).map(p=>path.join(p,provider))),
+    ...(provider==='codex' ? ['/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex','/Applications/Codex.app/Contents/Resources/codex',path.join(os.homedir(),'.local/bin/codex')] : [path.join(os.homedir(),'.local/bin/claude')])];
   binaries[provider]=candidates.find(p=>p && existsSync(p));
 }
 let connections={}, discovered=[], discoveryAt=0, persistenceTimer;
@@ -88,10 +88,10 @@ function run(chat,text,requestId){
   if(chat.demo){const timer=setTimeout(()=>{jobs.delete(chat.id);complete(chat,`Here is a direction we can build on: ${text}\n\nThis is a simulated response so you can try the handoff.\n\n<<<SWITCHBOARD_HANDOFF>>>${JSON.stringify({summary:'The demo agent finished. Your project is ready for another decision.',decisions:[],next_action:'Try another prompt or mark this chat caught up.'})}`);},2800);jobs.set(chat.id,{demo:true,timer});return {nextId:nextAttention(state.chats,chat.id)};}
   const child=spawn(binaries[provider],cliArgs(provider,chat),{cwd:chat.cwd,env:commandEnv,detached:true,stdio:['pipe','pipe','pipe']});
   const job={child,stopped:false,settled:false};jobs.set(chat.id,job);
-  let buffer='',stderr='',messages=[],failure='',final='';
+  let buffer='',stderr='',messages=[],failure='',final='',sessionCandidate='';
   const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';killGroup(child);},20*60*1000);
   function event(line){let raw;try{raw=JSON.parse(line);}catch{return;}const e=decodeEvent(provider,raw);
-    if(e.session)chat.sessions[provider]=e.session;
+    if(e.session)sessionCandidate=e.session;
     if(e.activity)chat.activity=e.activity;
     if(e.message){messages.push(e.message);chat.liveText=messages.join('\n\n').slice(-60000);}
     if(e.delta)chat.liveText=(chat.liveText+e.delta).slice(-60000);
@@ -107,6 +107,7 @@ function run(chat,text,requestId){
     if(job.stopped){complete(chat,answer,'You stopped this turn.');return;}
     if(error || code!==0 || failure){complete(chat,answer,failure || error?.message || stderr.trim() || `Agent exited with code ${code}.`);return;}
     if(!answer){complete(chat,'','The agent finished without a response.');return;}
+    if(sessionCandidate)chat.sessions[provider]=sessionCandidate;
     complete(chat,answer);
   }
   child.on('error',error=>settle(null,error));child.on('close',code=>settle(code));child.stdin.on('error',()=>{});child.stdin.end(prompt);
@@ -172,12 +173,13 @@ const server=http.createServer(async(req,res)=>{
       if(route==='/api/demo/clear'){for(const c of state.chats.filter(c=>c.demo)){const job=jobs.get(c.id);if(job?.timer)clearTimeout(job.timer);jobs.delete(c.id);}state.chats=state.chats.filter(c=>!c.demo);update({immediate:true});send(res,200,{ok:true});return;}
       if(route==='/api/ideas'){const text=string(data.text,5000);if(!text)throw new Error('Write an idea first.');const idea={id:randomUUID(),text,at:Date.now()};state.ideas.unshift(idea);update({immediate:true});send(res,201,{idea});return;}
       if(route==='/api/ideas/start'){const idea=state.ideas.find(i=>i.id===data.id);if(!idea)throw new Error('Idea not found.');const chat=newChat({title:idea.text.replace(/\s+/g,' ').slice(0,100),goal:idea.text,cwd:validCwd(data.cwd||root),provider:validProvider(data.provider||'codex')});state.chats.push(chat);state.ideas=state.ideas.filter(i=>i.id!==idea.id);update({immediate:true});send(res,201,{chat});return;}
-      const match=route.match(/^\/api\/chats\/([^/]+)\/(send|update|park|stop|delete)$/);
+      const match=route.match(/^\/api\/chats\/([^/]+)\/(send|update|park|stop|delete|reset-session)$/);
       if(match){const chat=requiredChat(match[1]);const action=match[2];
         if(action==='send'){const text=string(data.text,50000);if(!text)throw new Error('Write a prompt first.');send(res,202,run(chat,text,string(data.requestId||randomUUID(),100)));return;}
         if(action==='stop'){const job=jobs.get(chat.id);if(job?.demo){clearTimeout(job.timer);jobs.delete(chat.id);complete(chat,'','You stopped this demo turn.');}else if(job){job.stopped=true;chat.status='stopping';killGroup(job.child);const timer=setTimeout(()=>{if(jobs.has(chat.id))killGroup(job.child,'SIGKILL');},3000);timer.unref();update();}send(res,200,{ok:true});return;}
         if(['running','stopping'].includes(chat.status))throw new Error('Stop this turn before changing the project.');
         if(action==='update'){if(data.provider)chat.provider=validProvider(data.provider);if(data.permission){if(!['read','edit'].includes(data.permission))throw new Error('Unknown access mode.');chat.permission=data.permission;}if(data.decision){chat.decisions.push(string(data.decision));}if(data.goal!==undefined)chat.goal=string(data.goal);if(data.priority!==undefined)chat.priority=data.priority===1?1:0;if(data.status==='ready'){chat.status='ready';chat.readyAt=Date.now();}}
+        if(action==='reset-session'){delete chat.sessions[validProvider(chat.provider)];chat.error=null;}
         if(action==='park')chat.status='parked';
         if(action==='delete')state.chats=state.chats.filter(c=>c.id!==chat.id);
         update({immediate:true});send(res,200,{nextId:nextAttention(state.chats,chat.id)});return;

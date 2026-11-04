@@ -4,7 +4,7 @@ A local companion for Codex and Claude: prompt a project, move immediately to th
 
 ## Run
 
-On macOS, double-click **Launch Switchboard.command**. It opens http://127.0.0.1:4317 and uses the Node runtime bundled with Codex if Node is not on your PATH. Keep its Terminal window open while using the app. If Switchboard is already running, the launcher opens the existing workspace.
+On macOS, double-click **Launch Switchboard.command**. It opens http://127.0.0.1:4317 and looks for Node on your PATH, then in the local Codex runtime cache. Keep its Terminal window open while using the app. If Switchboard is already running, the launcher opens the existing workspace.
 
 With Node.js 20 or later:
 
@@ -12,7 +12,11 @@ With Node.js 20 or later:
 npm start
 ```
 
-No npm dependencies or installation are required. You need Codex CLI and/or Claude Code installed to use live agents. Connections detects your existing sign-ins. Its sign-in buttons start the provider's own browser authentication flow; Switchboard does not collect passwords or copy auth tokens.
+No npm dependencies or installation are required for Switchboard. The companion has been tested on macOS; Linux and Windows installations have not been verified. For live agents, install [Codex CLI](https://developers.openai.com/codex/cli) and/or [Claude Code](https://code.claude.com/docs/en/setup), with the provider's required account access and an internet connection. A provider login alone does not install its CLI or guarantee access; for example, Claude Code is not included in the free Claude plan.
+
+Open **Connections** to see whether each CLI and a local sign-in were detected. The sign-in buttons start the provider's own authentication flow; Switchboard does not collect passwords or copy auth tokens. If a request says authentication expired, choose **Sign in again** in Connections, or run `codex login` / `claude auth login` in a terminal and refresh Connections. A detected sign-in does not guarantee that the session is still valid or has remaining usage. If a provider conversation cannot be resumed, its error card can start a fresh session with the saved project context; the original provider conversation is not deleted.
+
+To try Switchboard without accounts, select **Try the demo**. To use a real agent, create a project and enter the full path to an existing local project folder, choose the provider, and send a prompt. Switchboard starts with read-only access; select **File edits** when the agent should change files.
 
 ## Use on another computer
 
@@ -32,20 +36,20 @@ GitHub stores the app's source code. Chat history, ideas, usage snapshots, queue
 
 - One chat interface with a Codex/Claude picker for every project.
 - Sending returns immediately, while the agent works in a background process. With **Send & move on** enabled, the next ready chat is selected. A completion adds a chat to the queue without pulling you away from whatever you are reading or typing.
-- Handoffs include a short summary, the next action, and saved decisions. Each provider keeps its own session for the project; switching carries recent conversation context and decisions to the other provider.
+- Handoffs request a short summary, next action, and saved decisions from the agent; if the response is malformed, the app falls back to the response text and a generic next step. Each provider keeps its own session for the project; switching includes the handoff, saved decisions, and a bounded excerpt of recent cross-provider conversation. Review important context because the excerpt is not a complete transcript.
 - Recent local Codex and Claude conversations can be discovered and imported. Imports include bounded history excerpts and their original project folder. The first prompt starts a new managed conversation, rather than resuming an original desktop chat that could still be running.
 - Projects can be prioritized, marked caught up, stopped, and continued. Up to three managed chats can work at once.
 - **Usage limits** lets you manually record the percentage used and an optional reset time for Codex and Claude. Open it from the sidebar, mobile navigation, or a project’s provider picker. Values are snapshots: update them after checking each provider. They do not refresh, count usage, reset, or block requests automatically; a passed reset is flagged so you know to check again.
 - An ideas shelf lets you capture ideas and turn them into a project. Draft prompts, decisions, conversation history, project goals, and ideas persist locally.
 - A clearly labeled demo uses simulated replies and no provider calls.
 - Responsive layout, keyboard shortcuts, reduced-motion support, and separate mobile navigation.
-- **Inside Codex**: an existing-chat queue at http://127.0.0.1:4317/desktop. With auto-switch enabled, type in the original Codex app. A local listener detects a composer-started turn and opens the next available original chat through `codex://threads/<id>`. This mode does not submit prompts, resume sessions through the companion, or create copied chats. You can reorder the queue, pause switching, and restrict triggering to selected chats. When all queued chats are working, choose a new brainstorming composer in Codex, the companion's saved-ideas workspace, or staying in the current chat. The brainstorming composer contains an unsubmitted starter prompt; a new chat is created only if you send it.
+- **Inside Codex (experimental)**: an existing-chat queue at http://127.0.0.1:4317/desktop. With auto-switch enabled, type in the original Codex app. A local listener detects a composer-started turn and opens the next available original chat through `codex://threads/<id>`. This mode does not submit prompts, resume sessions through the companion, or create copied chats. You can reorder the queue, pause switching, and restrict triggering to selected chats. When all queued chats are working, choose a new brainstorming composer in Codex, the companion's saved-ideas workspace, or staying in the current chat. The brainstorming composer contains an unsubmitted starter prompt; a new chat is created only if you send it.
 
 **Keyboard:** Command/Ctrl+Enter sends a prompt; Alt+N advances to the next ready chat.
 
 ## Current boundaries
 
-The companion chat interface uses installed, authenticated CLIs. The new **Inside Codex** mode operates on original Codex desktop chats on macOS, using a local background listener and native app links. The listener must stay running; launch the app again after stopping it. Queue settings and enabled state persist across restarts. This is an external integration, not a patch to the vendor application or an embedded composer extension.
+The companion chat interface uses installed, authenticated CLIs. The experimental **Inside Codex** mode is intended to navigate original Codex desktop chats on macOS using a local background listener and native app links. A full submission-triggered handoff has not been verified end to end. The listener must stay running; launch the app again after stopping it. Queue settings and enabled state persist across restarts. This is an external integration, not a patch to the vendor application or an embedded composer extension.
 
 Existing-chat switching currently supports **Codex on macOS**. Claude remains supported in the companion interface, but automatic switching of existing Claude desktop chats is not yet connected.
 
@@ -55,7 +59,7 @@ Companion context import is still an excerpt; it does not reproduce every artifa
 
 Codex defaults to a read-only sandbox; **File edits** selects workspace-write. Claude defaults to Read/Glob/Grep; **File edits** adds Edit/Write. Claude shell commands are not enabled in this version. Neither adapter bypasses provider permissions. Denied tools and unsuccessful turns are shown in the project, rather than reported as completed work. Changes made before a stop remain in the project folder.
 
-The existing sign-ins and live chat flow were checked on the development Mac. Sign-in launchers are implemented from the installed CLI interfaces, but a fresh logout/login cycle was not tested. Submitting a prompt uses the selected provider's account and applicable usage allowance. No project prompt runs merely because it was discovered or imported.
+The Codex live chat and a file edit were checked on the development Mac. A Claude sign-in may be detected even if its OAuth session has expired, so the live Claude flow should be tested with a valid account. Sign-in launchers use the installed CLI interfaces, but a fresh logout/login cycle was not tested. Submitting a prompt uses the selected provider's account and applicable usage allowance. No project prompt runs merely because it was discovered or imported.
 
 ## Implementation
 
@@ -77,11 +81,11 @@ npm test
 
 Tests cover attention ordering, working-chat exclusion, malformed handoffs, cross-provider context, managed-session resume, error reporting, immediate send acceptance, duplicate-request protection, stop behavior, persisted state after restart (including usage snapshots), usage input validation, and rejected cross-origin mutations.
 
-Nine tests passed, including bounded transcript discovery, filtering of composer versus automation events, constrained native URLs, busy-chat exclusion, ignoring historical prompt events, fragmented event records, completion updates, and pause behavior. Browser checks verified the existing-chat control panel and enabling the listener. The native open endpoint returned successful dispatch for an existing chat. A new prompt through the original Codex composer remains the live end-to-end acceptance check; a successful URL dispatch alone does not prove the visible destination or submission-triggered handoff.
+The suite includes simulated provider-process tests for context transfer, session resumption, and failed authentication, plus bounded transcript discovery, filtering of composer versus automation events, constrained native URLs, busy-chat exclusion, ignoring historical prompt events, fragmented event records, completion updates, and pause behavior. Browser checks verified the existing-chat control panel and enabling the listener. The native open endpoint returned successful dispatch for an existing chat. A new prompt through the original Codex composer remains the live end-to-end acceptance check; a successful URL dispatch alone does not prove the visible destination or submission-triggered handoff.
 
 Earlier companion browser checks verified send-and-advance, draft preservation, saved decisions after switching providers, and access to project memory at a 390px mobile breakpoint. The browser reported no errors or warnings during those checks.
 
-Live smoke checks on this Mac completed a Codex turn, switched to Claude with the same remembered word, and resumed the Codex conversation successfully. These small probes verify response transport, context handoff, and resume; they do not establish reliability for long builds or arbitrary existing desktop sessions.
+Earlier live smoke checks on this Mac completed a Codex turn, switched to Claude with the same remembered word, and resumed the Codex conversation successfully. Those checks used the sign-ins available at the time and do not establish current account access. These small probes verify response transport, context handoff, and resume; they do not establish reliability for long builds or arbitrary existing desktop sessions.
 
 ## Next build
 
