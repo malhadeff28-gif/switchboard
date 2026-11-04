@@ -70,8 +70,10 @@ async function checkConnections(){
     let stdout='',stderr='',failed=false;const timer=setTimeout(()=>child.kill(),6000);
     child.stdout.on('data',b=>{stdout+=b;});child.stderr.on('data',b=>{stderr+=b;});
     child.on('error',()=>{failed=true;clearTimeout(timer);connections[provider]={installed:true,signedIn:false,connectionError,loginError:authErrors.get(provider)||''};resolve();});
-    child.on('close',code=>{if(failed)return;clearTimeout(timer);let signedIn=false;try{signedIn=provider==='claude'?JSON.parse(stdout || stderr).loggedIn===true:code===0 && /logged in/i.test(stdout+'\n'+stderr);}catch{}
-      connections[provider]={installed:true,signedIn,signingIn:authJobs.has(provider),instructions:authJobs.get(provider)?.instructions || '',loginError:authErrors.get(provider)||''};resolve();});
+    child.on('close',code=>{if(failed)return;clearTimeout(timer);let signedIn=false,statusKnown=false;
+      if(provider==='claude'){try{const status=JSON.parse(stdout || stderr);statusKnown=typeof status.loggedIn==='boolean';signedIn=status.loggedIn===true;}catch{}}
+      else{const output=stdout+'\n'+stderr;statusKnown=/logged in/i.test(output);signedIn=code===0 && /logged in/i.test(output) && !/not logged in/i.test(output);}
+      connections[provider]={installed:true,signedIn,signingIn:authJobs.has(provider),instructions:authJobs.get(provider)?.instructions || '',loginError:authErrors.get(provider)||'',...(!statusKnown?{connectionError}: {})};resolve();});
   })));
   publish();return connections;
 }
