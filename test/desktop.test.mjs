@@ -17,7 +17,7 @@ test('only desktop composer events cause handoffs; automations and agent message
 test('existing-chat URL is narrowly constrained and the queue skips busy chats and the sending chat',()=>{
  assert.equal(codexChatUrl(id),`codex://threads/${id}`);assert.throws(()=>codexChatUrl('new?prompt=oops'));
  const brainstorm=new URL(codexBrainstormUrl());assert.equal(brainstorm.protocol,'codex:');assert.equal(brainstorm.host,'threads');assert.equal(brainstorm.pathname,'/new');assert.match(brainstorm.searchParams.get('prompt'),/think through an idea/);
- const queue=['codex:a','codex:b','codex:c'],statuses=new Map([['codex:b','working']]);assert.equal(nextDesktop(queue,statuses,'codex:a'),'codex:c');assert.equal(nextDesktop(['codex:a','codex:b'],statuses,'codex:a'),null);
+ const queue=['codex:a','codex:b','codex:c','codex:d'],statuses=new Map([['codex:b','working'],['codex:c','unknown'],['codex:d','ready']]);assert.equal(nextDesktop(queue,statuses,'codex:a'),'codex:d');assert.equal(nextDesktop(['codex:a','codex:b','codex:c'],statuses,'codex:a'),null);assert.equal(nextDesktop(['missing'],statuses,'codex:a'),null);
 });
 test('live file follower ignores old submissions and detects a fragmented new prompt-start record once',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'switchboard-native-')),file=path.join(dir,'sample.jsonl');

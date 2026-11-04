@@ -33,10 +33,16 @@ let connections={}, discovered=[], discoveryAt=0, persistenceTimer;
 let nativeSources=[],nativeSourcesAt=0,nativeError=null,listenerState='paused',handoffChain=Promise.resolve();
 const nativeStatuses=new Map(),seenNativeEvents=new Set(),listener=new CodexSubmitListener();
 function desktopState(){return {...state.desktop,listenerState,error:nativeError,queueDetails:state.desktop.queue.map(id=>{const s=nativeSources.find(s=>s.id===id);return {id,title:s?.title||id,status:nativeStatuses.get(id)||s?.desktopStatus||'unknown',summary:s?.summary||''};}),platform:process.platform,support:{codex:process.platform==='darwin',claude:false}};}
-async function nativeDiscovery(refresh=false){if(refresh||Date.now()-nativeSourcesAt>30000){nativeSources=(await discover({exclude:null})).filter(p=>p.desktopSupported);nativeSourcesAt=Date.now();for(const p of nativeSources)if(!nativeStatuses.has(p.id))nativeStatuses.set(p.id,p.desktopStatus);}return nativeSources;}
+async function nativeDiscovery(refresh=false){if(refresh||Date.now()-nativeSourcesAt>30000){nativeSources=(await discover({exclude:null})).filter(p=>p.desktopSupported);nativeSourcesAt=Date.now();for(const p of nativeSources)if(!listener.active||!nativeStatuses.has(p.id))nativeStatuses.set(p.id,p.desktopStatus);}return nativeSources;}
 function nativeHistory(event){state.desktop.history.unshift({...event,at:Date.now()});state.desktop.history=state.desktop.history.slice(0,20);update({immediate:true});}
 async function enableDesktop(enabled){if(enabled){if(process.platform!=='darwin')throw new Error('Existing-app switching currently requires macOS.');await nativeDiscovery(true);if(!state.desktop.queue.length)throw new Error('Choose at least one existing Codex chat.');if(state.desktop.queue.some(id=>!nativeSources.some(s=>s.id===id)))throw new Error('A selected chat is unavailable. Refresh the existing-chat queue.');
-    try{await listener.start();listenerState='listening';nativeError=null;}catch(e){listener.stop();listenerState='error';throw e;}
+    try{
+      // Observe new events before refreshing old state, so turns started while
+      // paused are reflected without overwriting a newer listener event.
+      nativeStatuses.clear();await listener.start();await nativeDiscovery(true);
+      if(state.desktop.queue.some(id=>!nativeSources.some(s=>s.id===id)))throw new Error('A selected chat is unavailable. Refresh the existing-chat queue.');
+      listenerState='listening';nativeError=null;
+    }catch(e){listener.stop();listenerState='error';throw e;}
   }else{listener.stop();listenerState='paused';}state.desktop.enabled=enabled;update({immediate:true});}
 listener.on('listenerError',error=>{nativeError=error.message;listenerState='error';listener.stop();state.desktop.enabled=false;update({immediate:true});});
 listener.on('event',event=>{
