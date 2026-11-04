@@ -26,7 +26,7 @@ npm start
 
 Install Node.js 20 or later before running these commands. Open http://127.0.0.1:4317 after the server starts. Install and sign in to Codex CLI and/or Claude Code on that computer to use live agents. Existing-chat auto-switch also requires the Codex desktop app on macOS; configure its queue at http://127.0.0.1:4317/desktop.
 
-GitHub stores the app's source code. Chat history, ideas, queue settings, browser drafts, and provider sign-ins stay on each computer and are not synced by this repository. Running Switchboard from a phone or tablet would require a separate hosted or remote-access implementation; this version runs locally on a computer.
+GitHub stores the app's source code. Chat history, ideas, usage snapshots, queue settings, browser drafts, and provider sign-ins stay on each computer and are not synced by this repository. Running Switchboard from a phone or tablet would require a separate hosted or remote-access implementation; this version runs locally on a computer.
 
 ## What works
 
@@ -35,6 +35,7 @@ GitHub stores the app's source code. Chat history, ideas, queue settings, browse
 - Handoffs include a short summary, the next action, and saved decisions. Each provider keeps its own session for the project; switching carries recent conversation context and decisions to the other provider.
 - Recent local Codex and Claude conversations can be discovered and imported. Imports include bounded history excerpts and their original project folder. The first prompt starts a new managed conversation, rather than resuming an original desktop chat that could still be running.
 - Projects can be prioritized, marked caught up, stopped, and continued. Up to three managed chats can work at once.
+- **Usage limits** lets you manually record the percentage used and an optional reset time for Codex and Claude. Open it from the sidebar, mobile navigation, or a project’s provider picker. Values are snapshots: update them after checking each provider. They do not refresh, count usage, reset, or block requests automatically; a passed reset is flagged so you know to check again.
 - An ideas shelf lets you capture ideas and turn them into a project. Draft prompts, decisions, conversation history, project goals, and ideas persist locally.
 - A clearly labeled demo uses simulated replies and no provider calls.
 - Responsive layout, keyboard shortcuts, reduced-motion support, and separate mobile navigation.
@@ -74,7 +75,7 @@ Supported environment overrides: `PORT`, `SWITCHBOARD_DATA_DIR`, `SWITCHBOARD_CO
 npm test
 ```
 
-Tests cover attention ordering, working-chat exclusion, malformed handoffs, cross-provider context, managed-session resume, error reporting, immediate send acceptance, duplicate-request protection, stop behavior, persisted state after restart, and rejected cross-origin mutations.
+Tests cover attention ordering, working-chat exclusion, malformed handoffs, cross-provider context, managed-session resume, error reporting, immediate send acceptance, duplicate-request protection, stop behavior, persisted state after restart (including usage snapshots), usage input validation, and rejected cross-origin mutations.
 
 Nine tests passed, including bounded transcript discovery, filtering of composer versus automation events, constrained native URLs, busy-chat exclusion, ignoring historical prompt events, fragmented event records, completion updates, and pause behavior. Browser checks verified the existing-chat control panel and enabling the listener. The native open endpoint returned successful dispatch for an existing chat. A new prompt through the original Codex composer remains the live end-to-end acceptance check; a successful URL dispatch alone does not prove the visible destination or submission-triggered handoff.
 

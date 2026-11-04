@@ -16,6 +16,7 @@ mkdirSync(storage,{recursive:true,mode:0o700});
 const stateFile=path.join(storage,'workspace.json');
 let state={chats:[],ideas:[]};
 if (existsSync(stateFile)) {try{state=JSON.parse(readFileSync(stateFile,'utf8'));}catch{throw new Error('Workspace data could not be read. Preserve .local/workspace.json before repairing it.');}}
+state.usage ||= {};
 state.desktop ||= {enabled:false,queue:state.chats.filter(c=>c.sourceId?.startsWith('codex:')).map(c=>c.sourceId),monitorAll:true,emptyBehavior:'brainstorm',history:[]};
 const clients=new Set(), jobs=new Map(), authJobs=new Map();
 const token=randomBytes(32).toString('hex');
@@ -51,7 +52,7 @@ listener.on('event',event=>{
   }).catch(error=>{nativeError=error.message;nativeHistory({kind:'error',sourceId:event.id,message:error.message});});
 });
 function save(){clearTimeout(persistenceTimer);const tmp=stateFile+'.tmp';writeFileSync(tmp,JSON.stringify(state,null,2),{mode:0o600});renameSync(tmp,stateFile);}
-function publish(){const data=JSON.stringify({chats:state.chats,ideas:state.ideas,connections,desktop:desktopState()});for(const res of clients)if(!res.writableEnded)res.write(`data: ${data}\n\n`);}
+function publish(){const data=JSON.stringify({chats:state.chats,ideas:state.ideas,usage:state.usage,connections,desktop:desktopState()});for(const res of clients)if(!res.writableEnded)res.write(`data: ${data}\n\n`);}
 function update({immediate=false}={}){publish();if(immediate)save();else{clearTimeout(persistenceTimer);persistenceTimer=setTimeout(save,150);}}
 for (const chat of state.chats) if (chat.status==='running' || chat.status==='stopping') {chat.status='ready';chat.error='The app closed during this turn. Review any partial output before continuing.';chat.readyAt=Date.now();}
 async function checkConnections(){
@@ -144,6 +145,16 @@ const server=http.createServer(async(req,res)=>{
         if(data.enabled!==undefined)await enableDesktop(data.enabled===true);else update({immediate:true});send(res,200,desktopState());return;
       }
       if(route==='/api/desktop/open'){const source=(await nativeDiscovery()).find(s=>s.id===data.id);if(!source)throw new Error('Existing Codex chat not found.');const result=await openInCodex(source.sourceSession);send(res,200,result);return;}
+      if(route==='/api/usage'){
+        const provider=validProvider(data.provider);
+        if(data.clear===true){delete state.usage[provider];}
+        else {
+          if(typeof data.used!=='number'||!Number.isFinite(data.used)||data.used<0||data.used>100)throw new Error('Enter a percentage between 0 and 100.');
+          if(typeof data.resetAt!=='string'||(data.resetAt && (!Number.isFinite(Date.parse(data.resetAt))||!/^\d{4}-\d{2}-\d{2}T/.test(data.resetAt))))throw new Error('Enter a valid reset time.');
+          state.usage[provider]={used:data.used,resetAt:data.resetAt?new Date(data.resetAt).toISOString():null,updatedAt:new Date().toISOString()};
+        }
+        update({immediate:true});send(res,200,{usage:state.usage});return;
+      }
       if(route==='/api/connections/refresh'){await checkConnections();send(res,200,connections);return;}
       if(route==='/api/connections/login'){await login(data.provider);send(res,200,{ok:true});return;}
       if(route==='/api/chats'){

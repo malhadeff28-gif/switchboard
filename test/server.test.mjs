@@ -22,7 +22,9 @@ test('accepted send returns the next chat immediately, rejects duplicate launche
   const repeat=await post(`/api/chats/${first.id}/send`,{text:'Try this direction',requestId:'one'});assert.equal(repeat.json.duplicate,true);
   const conflict=await post(`/api/chats/${first.id}/send`,{text:'Second task',requestId:'two'});assert.equal(conflict.status,409);
   await post(`/api/chats/${first.id}/stop`,{});bootstrap=await (await fetch(url+'/api/bootstrap')).json();assert.equal(bootstrap.chats.find(c=>c.id===first.id).status,'ready');assert.match(bootstrap.chats.find(c=>c.id===first.id).error,/stopped/);
-  await post('/api/ideas',{text:'A calendar that understands context'});await stop();await start();bootstrap=await (await fetch(url+'/api/bootstrap')).json();token=bootstrap.token;assert.equal(bootstrap.ideas[0].text,'A calendar that understands context');assert.equal(bootstrap.chats.length,3);
+  const invalid=await post('/api/usage',{provider:'codex',used:101,resetAt:''});assert.equal(invalid.status,400);
+  const saved=await post('/api/usage',{provider:'codex',used:65,resetAt:'2030-01-01T12:00:00.000Z'});assert.equal(saved.status,200);assert.equal(saved.json.usage.codex.used,65);
+  await post('/api/ideas',{text:'A calendar that understands context'});await stop();await start();bootstrap=await (await fetch(url+'/api/bootstrap')).json();token=bootstrap.token;assert.equal(bootstrap.ideas[0].text,'A calendar that understands context');assert.equal(bootstrap.chats.length,3);assert.equal(bootstrap.usage.codex.used,65);assert.equal(bootstrap.usage.codex.resetAt,'2030-01-01T12:00:00.000Z');const cleared=await post('/api/usage',{provider:'codex',clear:true});assert.equal(cleared.json.usage.codex,undefined);
   await post('/api/demo/clear',{});bootstrap=await (await fetch(url+'/api/bootstrap')).json();assert.equal(bootstrap.chats.length,0);
  }finally{if(child?.exitCode===null)await stop();await rm(data,{recursive:true,force:true});}
 });
