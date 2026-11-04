@@ -32,8 +32,8 @@ for (const provider of providers) {
 let connections={}, discovered=[], discoveryAt=0, persistenceTimer;
 let nativeSources=[],nativeSourcesAt=0,nativeError=null,listenerState='paused',handoffChain=Promise.resolve();
 const nativeStatuses=new Map(),seenNativeEvents=new Set(),listener=new CodexSubmitListener();
-function desktopState(){return {...state.desktop,listenerState,error:nativeError,queueDetails:state.desktop.queue.map(id=>{const s=nativeSources.find(s=>s.id===id);return {id,title:s?.title||id,status:nativeStatuses.get(id)||s?.desktopStatus||'unknown',summary:s?.summary||''};}),platform:process.platform,support:{codex:process.platform==='darwin',claude:false}};}
-async function nativeDiscovery(refresh=false){if(refresh||Date.now()-nativeSourcesAt>30000){nativeSources=(await discover({exclude:null})).filter(p=>p.desktopSupported);nativeSourcesAt=Date.now();for(const p of nativeSources)if(!listener.active||!nativeStatuses.has(p.id))nativeStatuses.set(p.id,p.desktopStatus);}return nativeSources;}
+function desktopState(){return {...state.desktop,listenerState,error:nativeError,statuses:Object.fromEntries(nativeStatuses),queueDetails:state.desktop.queue.map(id=>{const s=nativeSources.find(s=>s.id===id);return {id,title:s?.title||id,status:nativeStatuses.get(id)||s?.desktopStatus||'unknown',summary:s?.summary||''};}),platform:process.platform,support:{codex:process.platform==='darwin',claude:false}};}
+async function nativeDiscovery(refresh=false){if(refresh||Date.now()-nativeSourcesAt>30000){nativeSources=(await discover({exclude:null})).filter(p=>p.desktopSupported);nativeSourcesAt=Date.now();for(const p of nativeSources){if(!listener.active||!nativeStatuses.has(p.id))nativeStatuses.set(p.id,p.desktopStatus);else p.desktopStatus=nativeStatuses.get(p.id);}}return nativeSources;}
 function nativeHistory(event){state.desktop.history.unshift({...event,at:Date.now()});state.desktop.history=state.desktop.history.slice(0,20);update({immediate:true});}
 async function enableDesktop(enabled){if(enabled){if(process.platform!=='darwin')throw new Error('Existing-app switching currently requires macOS.');await nativeDiscovery(true);if(!state.desktop.queue.length)throw new Error('Choose at least one existing Codex chat.');if(state.desktop.queue.some(id=>!nativeSources.some(s=>s.id===id)))throw new Error('A selected chat is unavailable. Refresh the existing-chat queue.');
     try{
@@ -46,8 +46,8 @@ async function enableDesktop(enabled){if(enabled){if(process.platform!=='darwin'
   }else{listener.stop();listenerState='paused';}state.desktop.enabled=enabled;update({immediate:true});}
 listener.on('listenerError',error=>{nativeError=error.message;listenerState='error';listener.stop();state.desktop.enabled=false;update({immediate:true});});
 listener.on('event',event=>{
-  if(event.kind==='complete'){nativeStatuses.set(event.id,'ready');const source=nativeSources.find(s=>s.id===event.id);if(source&&event.summary)source.summary=event.summary.slice(0,1800);publish();return;}
-  nativeStatuses.set(event.id,'working');publish();
+  if(event.kind==='complete'){nativeStatuses.set(event.id,'ready');const source=nativeSources.find(s=>s.id===event.id);if(source){source.desktopStatus='ready';if(event.summary)source.summary=event.summary.slice(0,1800);}publish();return;}
+  nativeStatuses.set(event.id,'working');const source=nativeSources.find(s=>s.id===event.id);if(source)source.desktopStatus='working';publish();
   if(event.kind!=='submit'||!state.desktop.enabled||(!state.desktop.monitorAll&&!state.desktop.queue.includes(event.id)))return;
   const key=event.id+':'+event.turnId;if(seenNativeEvents.has(key))return;seenNativeEvents.add(key);if(seenNativeEvents.size>1000)seenNativeEvents.delete(seenNativeEvents.values().next().value);
   handoffChain=handoffChain.then(async()=>{if(!state.desktop.enabled)return;const targetId=nextDesktop(state.desktop.queue,nativeStatuses,event.id);
