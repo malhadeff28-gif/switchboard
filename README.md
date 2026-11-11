@@ -1,6 +1,12 @@
 # Switchboard
 
-A local companion for Codex and Claude: prompt a project, move immediately to the next chat that needs your attention, and keep the project's context in one place.
+Switchboard is a local workspace for running several Codex or Claude projects at once. Send a prompt in one project and move to the next chat that's ready for you. When you return, the workspace shows the last handoff and the decision each project needs.
+
+![Switchboard's simulated demo with three sample projects, a project handoff, and a queue of ready chats](docs/demo.png)
+
+**Try the workflow.** Start the app with `npm start`, open [the local workspace](http://127.0.0.1:4317), and select **Try the demo**. With **Send & move on** enabled, send a prompt on *Portfolio site*. The app moves you to another ready project while it simulates a reply. Demo mode uses sample conversations and requires no provider account.
+
+For an example of how project context crosses providers, the [provider-flow test](test/provider-flow.test.mjs) sends a detail to a simulated Codex process, switches to a simulated Claude process, and checks that the detail survives. [Validation](#validation) describes the live checks and their limits.
 
 ## Run
 
