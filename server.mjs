@@ -11,7 +11,8 @@ import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {attentionStatus,nextAttention, parseHandoff, agentPrompt, cliArgs, decodeEvent, providers} from './lib/core.mjs';
-import {discover} from './lib/discovery.mjs';
+import {discover,discoverPage} from './lib/discovery.mjs';
+const discoveredById=new Map();
 import {CodexSubmitListener,nextDesktop,openInCodex,openCodexBrainstorm} from './lib/desktop.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -159,7 +160,13 @@ const server=http.createServer(async(req,res)=>{
     if(route==='/api/health' && req.method==='GET'){send(res,200,{app:'switchboard',version:'0.3.0'});return;}
     if(route==='/api/bootstrap' && req.method==='GET'){send(res,200,{...state,chats:publicChats(),connections,desktop:desktopState(),token,root});return;}
     if(route==='/api/desktop' && req.method==='GET'){await nativeDiscovery(url.searchParams.has('refresh'));send(res,200,{...desktopState(),sources:nativeSources});return;}
-    if(route==='/api/discover' && req.method==='GET'){send(res,200,{projects:(await discovery(url.searchParams.has('refresh'))).filter(p=>!state.chats.some(c=>Object.values(c.sessions||{}).includes(p.sourceSession))).map(({messages,transcriptPath,...p})=>p)});return;}
+    if(route==='/api/discover' && req.method==='GET'){
+      const offset=Number(url.searchParams.get('offset')||0);
+      if(!Number.isSafeInteger(offset)||offset<0)throw new Error('Invalid history offset.');
+      const page=await discoverPage({offset});
+      for(const p of page.projects)discoveredById.set(p.id,p);
+      send(res,200,{nextOffset:page.nextOffset,projects:page.projects.filter(p=>!state.chats.some(c=>Object.values(c.sessions||{}).includes(p.sourceSession))).map(({messages,transcriptPath,...p})=>p)});return;
+    }
     if(route==='/api/events' && req.method==='GET'){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});clients.add(res);res.write(`data: ${JSON.stringify({...state,chats:publicChats(),connections,desktop:desktopState()})}\n\n`);const heartbeat=setInterval(()=>res.write(': heartbeat\n\n'),15000);req.on('close',()=>{clients.delete(res);clearInterval(heartbeat);});return;}
     if(req.method==='POST'){
       const data=await body(req);
@@ -195,7 +202,7 @@ const server=http.createServer(async(req,res)=>{
         const chat=newChat({title,goal:string(data.goal||''),cwd:validCwd(data.cwd||root),provider:validProvider(data.provider)});state.chats.push(chat);update({immediate:true});send(res,201,{chat});return;
       }
       if(route==='/api/import'){
-        const source=(await discovery()).find(p=>p.id===data.id);if(!source)throw new Error('This project is no longer available. Refresh discovery.');
+        const source=discoveredById.get(data.id)||(await discovery()).find(p=>p.id===data.id);if(!source)throw new Error('This project is no longer available. Refresh discovery.');
         let chat=state.chats.find(c=>c.sourceId===source.id);
         if(!chat){chat=newChat({title:source.title,cwd:source.cwd,provider:source.provider,summary:source.summary,messages:source.messages.map(m=>({...m,id:randomUUID(),imported:true})),sourceId:source.id,sourceSession:source.sourceSession,nextAction:'Review the original response.'});state.chats.push(chat);}
         if(data.watch===true)await monitor.watch(chat,source);

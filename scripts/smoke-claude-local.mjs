@@ -1,7 +1,7 @@
 // Optional integration check: the installed Claude CLI talks to a local mock,
 // while Codex is simulated. No provider account or real API key is required.
 import {spawn} from 'node:child_process';
-import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,writeFile,readFile} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -16,17 +16,21 @@ if(!claude){console.error('Claude Code was not found. Install it or set SWITCHBO
 const dir=await mkdtemp(path.join(os.tmpdir(),'switchboard-claude-smoke-'));
 const code='blue-otter-147';
 const answer=code+'\n<<<SWITCHBOARD_HANDOFF>>>'+JSON.stringify({summary:`Remember ${code}`,decisions:[],next_action:'Continue the integration test.'});
-const requests=[];
+const requests=[];let firstAnalysis=true;
 const mock=http.createServer(async(req,res)=>{
  let raw='';for await(const chunk of req)raw+=chunk;
  if(req.url?.includes('/v1/messages/count_tokens')){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({input_tokens:10}));return;}
  if(!req.url?.includes('/v1/messages')){res.writeHead(404);res.end();return;}
  let input;try{input=JSON.parse(raw);}catch{res.writeHead(400);res.end();return;}
- requests.push({containsCode:raw.includes(code),messageCount:input.messages?.length||0});
- const message={id:'msg_local_test',type:'message',role:'assistant',model:input.model||'mock-claude',content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:10,output_tokens:0}};
- const events=[{type:'message_start',message},{type:'content_block_start',index:0,content_block:{type:'text',text:''}},{type:'content_block_delta',index:0,delta:{type:'text_delta',text:answer}},{type:'content_block_stop',index:0},{type:'message_delta',delta:{stop_reason:'end_turn',stop_sequence:null},usage:{output_tokens:20}},{type:'message_stop'}];
+ const analysis=raw.includes('Return only JSON.');
+ const external=raw.includes('External conversation fixture');
+ const result=analysis?(firstAnalysis?'bad handoff':JSON.stringify({summary:'Compared two formats.',claims:[],decision:'Which format?',options:[{label:'CSV',tradeoff:'Flattens nested fields'},{label:'JSON',tradeoff:'Keeps nested fields'}]})):external?'CSV flattens nested fields. JSON keeps nested fields. Which format should ship?':answer;
+ if(analysis)firstAnalysis=false;
+ requests.push({analysis,toolCount:input.tools?.length||0,containsCode:raw.includes(code),messageCount:input.messages?.length||0});
+ const message={id:'msg_'+requests.length,type:'message',role:'assistant',model:input.model||'mock-claude',content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:10,output_tokens:0}};
+ const events=[{type:'message_start',message},{type:'content_block_start',index:0,content_block:{type:'text',text:''}},{type:'content_block_delta',index:0,delta:{type:'text_delta',text:result}},{type:'content_block_stop',index:0},{type:'message_delta',delta:{stop_reason:'end_turn',stop_sequence:null},usage:{output_tokens:20}},{type:'message_stop'}];
  if(input.stream){res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-cache'});for(const e of events)res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);res.end();}
- else{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({...message,content:[{type:'text',text:answer}],stop_reason:'end_turn',usage:{input_tokens:10,output_tokens:20}}));}
+ else{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({...message,content:[{type:'text',text:result}],stop_reason:'end_turn',usage:{input_tokens:10,output_tokens:20}}));}
 });
 let child;
 try{
@@ -37,7 +41,7 @@ try{
  const probe=http.createServer();await new Promise(resolve=>probe.listen(0,'127.0.0.1',resolve));const port=probe.address().port;await new Promise(resolve=>probe.close(resolve));
  const env={...process.env};
  for(const key of Object.keys(env))if(/^(ANTHROPIC_|CLAUDE_CODE_|CLAUDE_CONFIG_DIR$|CLAUDECODE$)/.test(key))delete env[key];
- Object.assign(env,{PORT:String(port),SWITCHBOARD_DATA_DIR:path.join(dir,'data'),SWITCHBOARD_CODEX_BIN:codex,SWITCHBOARD_CLAUDE_BIN:claude,CLAUDE_CONFIG_DIR:path.join(dir,'config'),ANTHROPIC_API_KEY:'not-a-real-key',ANTHROPIC_BASE_URL:`http://127.0.0.1:${mock.address().port}`,ANTHROPIC_MODEL:'claude-sonnet-4-5',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1'});
+ Object.assign(env,{PORT:String(port),CODEX_HOME:path.join(dir,'codex-home'),SWITCHBOARD_DATA_DIR:path.join(dir,'data'),SWITCHBOARD_CODEX_BIN:codex,SWITCHBOARD_CLAUDE_BIN:claude,CLAUDE_CONFIG_DIR:path.join(dir,'config'),ANTHROPIC_API_KEY:'not-a-real-key',ANTHROPIC_BASE_URL:`http://127.0.0.1:${mock.address().port}`,ANTHROPIC_MODEL:'claude-sonnet-4-5',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1'});
  child=spawn(process.execPath,[path.join(root,'server.mjs')],{env,stdio:['ignore','pipe','pipe']});
  let stderr='';child.stderr.on('data',b=>stderr+=b);
  const base=`http://127.0.0.1:${port}`;
@@ -55,6 +59,31 @@ try{
  await post(`/api/chats/${chat.id}/update`,{provider:'codex'});await turn(chat.id,'Continue the project.');
  await post(`/api/chats/${chat.id}/update`,{provider:'claude'});c=await turn(chat.id,'Recall the project code again.');
  if(c.sessions.claude!==firstSession||requests.length<2||!requests[1].containsCode||requests[1].messageCount<=requests[0].messageCount)throw Error('Claude CLI did not resume its session with context.');
+ const sourceSession='ad87bf93-3f80-40cb-9dd4-4b477d2b1cfe';
+ async function outside(resume){
+   const args=['-p',resume?'--resume':'--session-id',sourceSession,'--tools','','--output-format','json'];
+   const proc=spawn(claude,args,{cwd:path.join(dir,'project'),env,stdio:['pipe','ignore','pipe']});let msg='';
+   proc.stderr.on('data',x=>msg+=x);proc.stdin.end('External conversation fixture: choose CSV or JSON.');
+   await new Promise((ok,bad)=>{proc.once('error',bad);proc.once('close',n=>n===0?ok():bad(Error(msg.slice(-300))));});
+ }
+ await outside(false);
+ const sources=(await (await fetch(base+'/api/discover?refresh=1')).json()).projects;
+ const source=sources.find(x=>x.sourceSession===sourceSession);
+ if(!source)throw Error('External Claude session missing from discovery.');
+ const followed=(await post('/api/import',{id:source.id,watch:true})).chat;
+ async function waitAnalysis(count,status){
+   for(let i=0;i<150;i++){const chat=(await get()).chats.find(x=>x.id===followed.id);if(chat.turns?.length===count && chat.turns.at(-1).analysis===status)return chat.turns.at(-1);
+    if(chat.turns?.at(-1)?.analysis==='error' && status!=='error')throw Error(chat.turns.at(-1).analysisError);await delay(200);}
+   throw Error('Timed out waiting for external Claude handoff '+count+' '+status);
+ }
+ const original=await waitAnalysis(1,'error');if(!original.answer.includes('nested fields'))throw Error('Original Claude answer lost on analysis failure.');
+ await post('/api/chats/'+followed.id+'/analyze',{turnId:original.id});const retried=await waitAnalysis(1,'ready');
+ if(retried.card.options[1]?.label!=='JSON')throw Error('Claude retry lost the second option.');
+ await outside(true);await waitAnalysis(2,'ready');
+ const withHooks=JSON.parse(await readFile(path.join(dir,'config','settings.json'),'utf8'));if(!withHooks.hooks?.Stop?.length)throw Error('Claude completion hooks missing.');
+ if(requests.filter(r=>r.analysis).some(r=>r.toolCount))throw Error('Watched output analysis exposed tools.');
+ await post('/api/chats/'+followed.id+'/pause-watch',{});
+ console.log('Passed: external Claude turns, tool-free analysis, original result on failure, retry, and options.');
  console.log('Passed: installed Claude CLI, local mock responses, cross-provider context, handoff, and Claude session resume.');
  console.log('This does not test live Anthropic authentication or service access.');
 }catch(error){console.error(`Smoke test failed: ${error.message}`);process.exitCode=1;}

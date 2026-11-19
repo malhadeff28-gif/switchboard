@@ -2,6 +2,8 @@ name: Pilot downloads
 on:
   push:
     branches: [main, 'switchboard-pilot-*']
+  release:
+    types: [published]
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,9 +29,17 @@ jobs:
           node-version: 24
       - run: node --test
       - run: python3 scripts/package.py ${{ matrix.target }} --cache cache --dest downloads
-        if: runner.os != 'Windows'
+        if: github.event_name != 'release' && runner.os != 'Windows'
       - run: python scripts/package.py ${{ matrix.target }} --cache cache --dest downloads
-        if: runner.os == 'Windows'
+        if: github.event_name != 'release' && runner.os == 'Windows'
+      - name: Download the published ZIP
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          ASSET: Switchboard-${{ matrix.target }}.zip
+        shell: bash
+        run: gh release download "$RELEASE_TAG" --pattern "$ASSET" --dir downloads
       - run: python3 scripts/check-package.py downloads/Switchboard-${{ matrix.target }}.zip
         if: runner.os != 'Windows'
       - run: python scripts/check-package.py downloads/Switchboard-${{ matrix.target }}.zip
