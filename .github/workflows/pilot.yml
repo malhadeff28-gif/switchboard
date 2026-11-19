@@ -1,0 +1,36 @@
+name: Pilot downloads
+on:
+  push:
+    branches: [main, 'switchboard-pilot-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  launch:
+    if: github.event.repository.private == false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: darwin-arm64 }
+          - { os: windows-latest, target: win-x64 }
+          - { os: ubuntu-latest, target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: windows-11-arm, target: win-arm64 }
+          - { os: macos-15-intel, target: darwin-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - run: node --test
+      - run: python3 scripts/package.py ${{ matrix.target }} --cache cache --dest downloads
+        if: runner.os != 'Windows'
+      - run: python scripts/package.py ${{ matrix.target }} --cache cache --dest downloads
+        if: runner.os == 'Windows'
+      - run: python3 scripts/check-package.py downloads/Switchboard-${{ matrix.target }}.zip
+        if: runner.os != 'Windows'
+      - run: python scripts/check-package.py downloads/Switchboard-${{ matrix.target }}.zip
+        if: runner.os == 'Windows'

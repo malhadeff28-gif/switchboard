@@ -1,101 +1,45 @@
 # Switchboard
 
-Switchboard is a local workspace for running several Codex or Claude projects at once. Send a prompt in one project and move to the next chat that's ready for you. When you return, the workspace shows the last handoff and the decision each project needs.
+Switchboard is a local interface for Codex and Claude Code. Choose chats to follow, see what an agent finished and the evidence behind its answer, then send your next decision to either provider. Each provider uses your own installed CLI and account.
 
-![Switchboard's simulated demo with three sample projects, a project handoff, and a queue of ready chats](docs/demo.png)
+## Download the pilot
 
-**Try the workflow.** Start the app with `npm start`, open [the local workspace](http://127.0.0.1:4317), and select **Try the demo**. With **Send & move on** enabled, send a prompt on *Portfolio site*. The app moves you to another ready project while it simulates a reply. Demo mode uses sample conversations and requires no provider account.
+[Open the pilot downloads](https://github.com/malhadeff28-gif/switchboard/releases/tag/v0.3.0-pilot.1). Choose the ZIP for your operating system and CPU. Extract the entire folder, then open its launcher. The ZIP includes Node. Keep the launch window open while using the browser workspace.
 
-For an example of how project context crosses providers, the [provider-flow test](test/provider-flow.test.mjs) sends a detail to a simulated Codex process, switches to a simulated Claude process, and checks that the detail survives. [Validation](#validation) describes the live checks and their limits.
+| Computer | Download name | Launcher |
+|---|---|---|
+| Apple silicon Mac | Switchboard-darwin-arm64.zip | Start Switchboard.command |
+| Intel Mac | Switchboard-darwin-x64.zip | Start Switchboard.command |
+| Windows, Intel or AMD | Switchboard-win-x64.zip | Start Switchboard.cmd |
+| Windows on ARM | Switchboard-win-arm64.zip | Start Switchboard.cmd |
+| Linux, Intel or AMD | Switchboard-linux-x64.zip | Start Switchboard.sh |
+| Linux on ARM64 | Switchboard-linux-arm64.zip | Start Switchboard.sh |
 
-## Run
+On Linux you can run `sh "Start Switchboard.sh"` from the extracted folder. Switchboard listens at [127.0.0.1:4317](http://127.0.0.1:4317). The pilot ZIPs are unsigned. Managed computers may block scripts or downloads. The release notes identify the platforms and provider flows tested.
 
-On macOS, double-click **Launch Switchboard.command**. It opens http://127.0.0.1:4317 and looks for Node on your PATH, then in the local Codex runtime cache. Keep its Terminal window open while using the app. If Switchboard is already running, the launcher opens the existing workspace.
+## First run
 
-With Node.js 20 or later:
+1. Open **Connections**. Install [Codex CLI](https://developers.openai.com/codex/cli) or [Claude Code](https://code.claude.com/docs/en/setup) using the provider’s instructions. Click **Refresh connections** and sign in with either provider. The panel distinguishes a local sign-in from the time the provider last returned a successful response.
+2. Select **Choose chats**. Pick a conversation from your local Codex or Claude Code history. Repeat to add another. Switchboard reads the selected project’s transcript and shows its latest result while it prepares the handoff.
+3. Open a result. Read **What happened**, expand a numbered source, then compare the options and their tradeoffs. Click an option to put it in your draft or type your own answer. Select the provider and press **Send**. **Send & move on** advances to the next ready project. The result menu lets you revisit earlier turns.
+4. **Pause** on a watched project stops automatic handoff analysis. You can also try simulated projects without connecting an account.
 
-```sh
-npm start
-```
+## What follows you between providers
 
-No npm dependencies or installation are required for Switchboard. The automated suite runs on macOS and Linux with simulated providers; live provider sign-in and requests have been checked only on macOS. Windows has not been verified. For live agents, install [Codex CLI](https://developers.openai.com/codex/cli) and/or [Claude Code](https://code.claude.com/docs/en/setup), with the provider's required account access and an internet connection. A provider login alone does not install its CLI or guarantee access; for example, Claude Code is not included in the free Claude plan.
+A watched chat remains open in its original application. Your first Switchboard reply starts a separate session in that project folder. Later replies resume the corresponding Switchboard session for that provider. The receiving provider gets the handoff you answered, its ordered options and evidence, relevant prior instructions, saved project decisions, and a bounded conversation excerpt. A project starts with read-only file access. **File edits** enables workspace writes through the selected provider. Claude shell commands are unavailable in managed project turns.
 
-Open **Connections** to see whether each CLI and a local sign-in were detected. The sign-in buttons start the provider's own authentication flow; Switchboard does not collect passwords or copy auth tokens. If the provider asks you to paste an authorization code, enter it in Connections; the code is passed to the CLI and is not saved in the workspace. If a request says authentication expired, choose **Sign in again** in Connections, or run `codex login` / `claude auth login` in a terminal and refresh Connections. A detected sign-in does not guarantee that the session is still valid or has remaining usage. If an in-app sign-in exits unsuccessfully or times out, Connections displays a retry message without retaining the provider's temporary sign-in output. If a provider conversation cannot be resumed, its error card can start a fresh session with the saved project context; the original provider conversation is not deleted.
+Selecting a chat enables automatic analysis on that provider’s account and may consume its usage allowance. A watched completion appears immediately. Switchboard asks Codex for a text-only sample or runs Claude Code with tools and session persistence disabled. It presents cited chat, command, and file records. A reported claim can have no independent verification. A failed analysis leaves the original output available with a retry button. A provider CLI without the required sampling or hook interface may need an update.
 
-To try Switchboard without accounts, select **Try the demo**. To use a real agent, create a project and enter the full path to an existing local project folder, choose the provider, and send a prompt. Switchboard starts with read-only access; select **File edits** when the agent should change files.
+For Claude, following a chat installs Switchboard’s own Stop and StopFailure hooks alongside existing user hooks. Reload hook settings if Claude prompts. These hooks record completion only for selected sessions. Removing or pausing the last Claude watch removes Switchboard’s hook entries. Switchboard also reads lifecycle records to catch up after a restart. Only the latest completed turn is imported when you first follow a chat.
 
-## Use on another computer
+## Storage and other features
 
-Clone the repository:
+The portable launcher stores settings, chats and handoffs under the user data directory: **Library/Application Support/Switchboard** on Mac, **%LOCALAPPDATA%\\Switchboard** on Windows, and **$XDG_DATA_HOME/Switchboard** or **~/.local/share/Switchboard** on Linux. Keep this directory when replacing the download. Source checkouts continue to use **.local**. Draft prompts are kept in browser local storage. Sign-in stays with the CLI. There is no Switchboard cloud service.
 
-```sh
-git clone https://github.com/malhadeff28-gif/switchboard.git
-cd switchboard
-npm start
-```
+The ideas shelf, manual usage snapshots, priorities, stop controls, and simulated demo remain available. The separate **Inside Codex** page is an experimental Mac feature for navigating existing native chats. The portable workspace works through the browser.
 
-Install Node.js 20 or later before running these commands. Open http://127.0.0.1:4317 after the server starts. Install and sign in to Codex CLI and/or Claude Code on that computer to use live agents. Existing-chat auto-switch also requires the Codex desktop app on macOS; configure its queue at http://127.0.0.1:4317/desktop.
+## Development and validation
 
-GitHub stores the app's source code. Chat history, ideas, usage snapshots, queue settings, browser drafts, and provider sign-ins stay on each computer and are not synced by this repository. Running Switchboard from a phone or tablet would require a separate hosted or remote-access implementation; this version runs locally on a computer.
+Requires Node 20 or later. Run `npm start` for a source checkout and `npm test` for regression tests. `npm run test:claude-local` exercises the installed Claude Code CLI against a local mock API. Live provider access requires a separate check. Environment overrides include `PORT`, `SWITCHBOARD_DATA_DIR`, `SWITCHBOARD_CODEX_BIN`, `SWITCHBOARD_CLAUDE_BIN`, and `SWITCHBOARD_EXCLUDE_SESSION`.
 
-## What works
-
-- One chat interface with a Codex/Claude picker for every project.
-- Sending returns immediately, while the agent works in a background process. With **Send & move on** enabled, the next ready chat is selected. A completion adds a chat to the queue without pulling you away from whatever you are reading or typing.
-- Handoffs request a short summary, next action, and saved decisions from the agent; if the response is malformed, the app falls back to the response text and a generic next step. Each provider keeps its own session for the project; switching includes the handoff, saved decisions, and a bounded excerpt of recent cross-provider conversation. Review important context because the excerpt is not a complete transcript.
-- Recent local Codex and Claude conversations can be discovered and imported. Imports include bounded history excerpts and their original project folder. The first prompt starts a new managed conversation, rather than resuming an original desktop chat that could still be running.
-- Projects can be prioritized, marked caught up, stopped, and continued. Up to three managed chats can work at once.
-- **Usage limits** lets you manually record the percentage used and an optional reset time for Codex and Claude. Open it from the sidebar, mobile navigation, or a project’s provider picker. Values are snapshots: update them after checking each provider. They do not refresh, count usage, reset, or block requests automatically; a passed reset is flagged so you know to check again.
-- An ideas shelf lets you capture ideas and turn them into a project. Draft prompts, decisions, conversation history, project goals, and ideas persist locally.
-- A clearly labeled demo uses simulated replies and no provider calls.
-- Responsive layout, keyboard shortcuts, reduced-motion support, and separate mobile navigation.
-- **Inside Codex (experimental)**: an existing-chat queue at http://127.0.0.1:4317/desktop. With auto-switch enabled, type in the original Codex app. A local listener detects a composer-started turn and opens the next available original chat through `codex://threads/<id>`. This mode does not submit prompts, resume sessions through the companion, or create copied chats. You can reorder the queue, pause switching, and restrict triggering to selected chats. When no queued chat is known to be ready, choose a new brainstorming composer in Codex, the companion's saved-ideas workspace, or staying in the current chat. The brainstorming composer contains an unsubmitted starter prompt; a new chat is created only if you send it.
-
-**Keyboard:** Command/Ctrl+Enter sends a prompt; Alt+N advances to the next ready chat.
-
-## Current boundaries
-
-The companion chat interface uses installed, authenticated CLIs. The experimental **Inside Codex** mode is intended to navigate original Codex desktop chats on macOS using a local background listener and native app links. A full submission-triggered handoff has not been verified end to end. The listener must stay running; launch the app again after stopping it. It refreshes status when re-enabled and skips chats whose status is unknown. Queue settings and enabled state persist across restarts. This is an external integration, not a patch to the vendor application or an embedded composer extension.
-
-Existing-chat switching currently supports **Codex on macOS**. Claude remains supported in the companion interface, but automatic switching of existing Claude desktop chats is not yet connected.
-
-The Codex listener watches appended local session events. It reacts to root turns attributed to `composer`; scheduled automations, agent messages, subagents, and CLI executions do not trigger navigation. It opens a chat when its new turn starts, so a message queued behind an already-running turn may not switch immediately when first submitted. The transcript format is an installed-version integration and may change with Codex updates. Initial ready/working status comes from recent history; subsequent start/completion events update it while the listener is active. Remote/cloud-only chats without a local transcript are not covered.
-
-Companion context import is still an excerpt; it does not reproduce every artifact, attachment, tool result, or connector available in the original chat. Existing-app switching avoids those import limits by opening the original conversation.
-
-Codex defaults to a read-only sandbox; **File edits** selects workspace-write. Claude defaults to Read/Glob/Grep; **File edits** adds Edit/Write. Claude shell commands are not enabled in this version. Neither adapter bypasses provider permissions. Denied tools and unsuccessful turns are shown in the project, rather than reported as completed work. Changes made before a stop remain in the project folder.
-
-The Codex live chat and a file edit were checked on the development Mac. A Claude sign-in may be detected even if its OAuth session has expired, so the live Claude flow should be tested with a valid account. Sign-in launchers use the installed CLI interfaces, but a fresh logout/login cycle was not tested. Submitting a prompt uses the selected provider's account and applicable usage allowance. No project prompt runs merely because it was discovered or imported.
-
-## Implementation
-
-`server.mjs` serves the UI on loopback, supervises CLI processes, handles authentication status and launch flows, and saves workspace state atomically. `lib/core.mjs` holds the attention scheduler, handoff parsing, context transfer, CLI arguments, and event normalization. `lib/discovery.mjs` reads bounded excerpts from local session histories. `public/` is the buildless interface. Live updates use Server-Sent Events.
-
-`lib/desktop.mjs` follows local Codex logs from their current end, normalizes composer and completion events, selects a ready original chat, and dispatches the installed app's native URL. It does not replay old prompts on startup. The handoff log records IDs, target titles, and timing, not prompt text. The installed Codex app's registered URL scheme and existing-chat URL parser were checked locally before using this path; vendor app files were not modified.
-
-The agent adapters use the documented [Codex non-interactive CLI](https://developers.openai.com/codex/noninteractive) and [Claude Code programmatic CLI](https://code.claude.com/docs/en/headless). Arguments were checked against the CLIs installed on this Mac.
-
-Runtime records are in `.local/workspace.json`; draft text is in browser localStorage. Authentication instructions are held in memory during sign-in and are not written to the workspace. `.local/` is excluded from source sharing. The server binds only to 127.0.0.1, validates Host and Origin, and requires a per-run token on mutations. No cloud server is involved; prompts and supplied context still go to the selected AI provider when you press Send.
-
-Supported environment overrides: `PORT`, `SWITCHBOARD_DATA_DIR`, `SWITCHBOARD_CODEX_BIN`, `SWITCHBOARD_CLAUDE_BIN`, `SWITCHBOARD_EXCLUDE_SESSION`, and launcher-only `SWITCHBOARD_NODE`.
-
-## Validation
-
-```sh
-npm test
-```
-
-The public repository runs the automated suite on macOS and Linux with Node 20 and 24. Tests cover attention ordering, working-chat exclusion, malformed handoffs, cross-provider context, managed-session resume, error reporting, immediate send acceptance, duplicate-request protection, stop behavior, persisted state after restart (including usage snapshots), usage input validation, and rejected cross-origin mutations. The provider-process tests use simulations and do not authenticate to live accounts.
-
-The suite includes simulated provider-process tests for context transfer, session resumption, sign-in recovery, and failed authentication, plus bounded transcript discovery, filtering of composer versus automation events, constrained native URLs, busy-chat exclusion, ignoring historical prompt events, fragmented event records, completion updates, and pause behavior. Browser checks verified the existing-chat control panel and enabling the listener. The native open endpoint returned successful dispatch for an existing chat. A new prompt through the original Codex composer remains the live end-to-end acceptance check; a successful URL dispatch alone does not prove the visible destination or submission-triggered handoff.
-
-
-To check your installed Claude CLI without a live provider response, run `npm run test:claude-local`. It starts a local mock API, uses a dummy API key and isolated Claude configuration, disables nonessential CLI traffic, and simulates Codex. It checks context transfer, handoff parsing, and Claude session resume through the installed Claude executable. This does **not** verify an Anthropic login, real model response, provider limits, or service availability. The CLI must already be installed; `SWITCHBOARD_CLAUDE_BIN` can select it.
-
-Earlier companion browser checks verified send-and-advance, draft preservation, saved decisions after switching providers, and access to project memory at a 390px mobile breakpoint. The browser reported no errors or warnings during those checks.
-
-Earlier live smoke checks on this Mac completed a Codex turn, switched to Claude with the same remembered word, and resumed the Codex conversation successfully. Those checks used the sign-ins available at the time and do not establish current account access. These small probes verify response transport, context handoff, and resume; they do not establish reliability for long builds or arbitrary existing desktop sessions.
-
-## Next build
-
-The next milestone is the Claude existing-session navigation path and a packaged menu-bar listener. A structured Codex app-server / Claude Agent SDK bridge can replace transcript observation where the installed app exposes a shared runtime. Then add inline permission requests for companion runs, configurable attention ranking, and better context compression for long conversations.
+Build a portable download with `python3 scripts/package.py linux-x64 --cache build/cache --dest build/downloads`. The builder checks the pinned official Node archive checksum and includes its license. Run `python3 scripts/check-package.py build/downloads/Switchboard-linux-x64.zip` on the matching OS and CPU to test extraction, launch, send, handoff, and data location. Add `--browser` for a desktop trial.

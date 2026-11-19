@@ -23,7 +23,7 @@ test('live file follower ignores old submissions and detects a fragmented new pr
  const dir=await mkdtemp(path.join(os.tmpdir(),'switchboard-native-')),file=path.join(dir,'sample.jsonl');
  const listener=new CodexSubmitListener({root:dir,pollMs:30});const events=[];listener.on('event',e=>events.push(e));listener.on('listenerError',e=>{throw e;});
  try{
-  await writeFile(file,JSON.stringify({type:'session_meta',payload:meta})+'\n'+JSON.stringify(started('old'))+'\n');await listener.start();assert.equal(events.length,0);
+  await writeFile(file,JSON.stringify({type:'session_meta',payload:{...meta,base_instructions:'x'.repeat(36000)}})+'\n'+JSON.stringify(started('old'))+'\n');await listener.start();assert.equal(events.length,0);
   const record=JSON.stringify(started('new'));await appendFile(file,record.slice(0,80));await listener.poll();assert.equal(events.length,0);await appendFile(file,record.slice(80)+'\n');await listener.poll();
   for(let n=0;n<30&&events.length===0;n++)await new Promise(r=>setTimeout(r,10));assert.equal(events.length,1);assert.equal(events[0].turnId,'new');await listener.poll();assert.equal(events.length,1);
   const complete=Buffer.from(JSON.stringify({type:'event_msg',timestamp:new Date().toISOString(),payload:{type:'task_complete',turn_id:'new',root_turn_id:'new',last_agent_message:'Résumé ready. ✔'}})+'\n');const split=complete.indexOf(Buffer.from('é'))+1;
