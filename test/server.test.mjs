@@ -1,3 +1,4 @@
+import {availablePort} from '../scripts/available-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -8,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 test('accepted send returns the next chat immediately, rejects duplicate launches, and survives restart',async()=>{
  const data=await mkdtemp(path.join(os.tmpdir(),'switchboard-test-'));
- const port=44000+Math.floor(Math.random()*10000),url=`http://127.0.0.1:${port}`;
+ const port=await availablePort(),url=`http://127.0.0.1:${port}`;
  let child;
  async function start(){child=spawn(process.execPath,[path.join(root,'server.mjs')],{env:{...process.env,PORT:String(port),SWITCHBOARD_DATA_DIR:data},stdio:['ignore','pipe','pipe']});let error='';child.stderr.on('data',b=>error+=b);await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(error||'Startup timeout')),10000);child.stdout.on('data',b=>{if(b.toString().includes('is running')){clearTimeout(timer);resolve();}});child.on('exit',()=>{clearTimeout(timer);reject(new Error(error));});});}
  async function stop(){await new Promise(resolve=>{child.once('exit',resolve);child.kill('SIGTERM');});}

@@ -1,3 +1,4 @@
+import {availablePort} from '../scripts/available-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -30,7 +31,7 @@ let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+
 });`;
  const codex=path.join(dir,'codex-fake'),claude=path.join(dir,'claude-fake');
  await Promise.all([writeFile(codex,fixture,{mode:0o755}),writeFile(claude,fixture,{mode:0o755})]);
- const port=45000+Math.floor(Math.random()*10000),base=`http://127.0.0.1:${port}`;
+ const port=await availablePort(),base=`http://127.0.0.1:${port}`;
  const child=spawn(process.execPath,[path.join(root,'server.mjs')],{env:{...process.env,PORT:String(port),SWITCHBOARD_DATA_DIR:data,SWITCHBOARD_CODEX_BIN:codex,SWITCHBOARD_CLAUDE_BIN:claude},stdio:['ignore','pipe','pipe']});
  let errors='';child.stderr.on('data',b=>errors+=b);
  let token;

@@ -1,3 +1,4 @@
+import {availablePort} from '../scripts/available-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -16,7 +17,7 @@ if(args.includes('status')){console.log(JSON.stringify({loggedIn:fs.existsSync(m
 if(args.includes('login')){process.stdout.write('Paste code here if prompted > ');process.stdin.setEncoding('utf8');process.stdin.once('data',text=>{if(text.trim()==='local-test-code'){fs.writeFileSync(marker,'yes');process.exit(0);}process.exit(1);});}
 `;
  await writeFile(bin,fixture,{mode:0o755});
- const port=44000+Math.floor(Math.random()*10000),base=`http://127.0.0.1:${port}`;
+ const port=await availablePort(),base=`http://127.0.0.1:${port}`;
  const child=spawn(process.execPath,[path.join(root,'server.mjs')],{env:{...process.env,PORT:String(port),SWITCHBOARD_DATA_DIR:data,SWITCHBOARD_CODEX_BIN:bin,SWITCHBOARD_CLAUDE_BIN:bin},stdio:['ignore','pipe','pipe']});
  let error='';child.stderr.on('data',b=>error+=b);let token;
  async function get(){const r=await fetch(base+'/api/bootstrap');return r.json();}
