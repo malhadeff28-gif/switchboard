@@ -59,6 +59,16 @@ def check(archive, browser=False):
                 try: os.killpg(proc.pid,signal.SIGTERM)
                 except ProcessLookupError: pass
             proc.wait(timeout=15)
+            if native:
+                # taskkill and cmd can return before Windows releases the child image.
+                deadline=time.monotonic()+10
+                while True:
+                    try:
+                        (root/"runtime"/"node.exe").unlink()
+                        break
+                    except PermissionError:
+                        if time.monotonic()>=deadline: raise
+                        time.sleep(.15)
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
