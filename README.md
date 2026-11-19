@@ -15,7 +15,7 @@ Switchboard is a local interface for Codex and Claude Code. Choose chats to foll
 | Linux, Intel or AMD | Switchboard-linux-x64.zip | Start Switchboard.sh |
 | Linux on ARM64 | Switchboard-linux-arm64.zip | Start Switchboard.sh |
 
-On Linux you can run `sh "Start Switchboard.sh"` from the extracted folder. Switchboard listens at [127.0.0.1:4317](http://127.0.0.1:4317). The pilot ZIPs are unsigned. Managed computers may block scripts or downloads. The release notes identify the platforms and provider flows tested.
+On Mac, if Finder does not open the unsigned launcher, open Terminal, type `sh` followed by a space, drag **Start Switchboard.command** from the extracted folder into Terminal, and press Return. This launches the bundled runtime. On Linux you can run `sh "Start Switchboard.sh"` from the extracted folder. Switchboard listens at [127.0.0.1:4317](http://127.0.0.1:4317). The pilot ZIPs are unsigned. Managed computers may block scripts or downloads. The release notes identify the platforms and provider flows tested.
 
 ## First run
 
