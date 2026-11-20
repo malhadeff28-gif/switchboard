@@ -13,7 +13,7 @@ import {randomUUID, randomBytes} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
-import {attentionStatus,nextAttention, parseHandoff, agentPrompt, cliArgs, replyContext, decodeEvent, providers} from './lib/core.mjs';
+import {attentionStatus,pendingWatchedReply,nextAttention, parseHandoff, agentPrompt, cliArgs, replyContext, decodeEvent, providers} from './lib/core.mjs';
 import {discover,discoverPage,discoverySnapshot} from './lib/discovery.mjs';
 const discoveredById=new Map();
 const discoverySnapshots=new Map();
@@ -237,7 +237,7 @@ function run(chat,text,requestId,turnId,routeProvider,choice){
   persistChat(chat,{
     ...project,messages:nextMessages,provider,error:null,permissionNotice:undefined,status:'running',
     activity:'Starting your agent',liveText:'',startedAt:at,
-    unseenWatchedTurn:chat.unseenWatchedTurn===turn?.id?undefined:chat.unseenWatchedTurn
+    unseenWatchedTurn:pendingWatchedReply(chat,turn)
   });
   if(chat.demo){const timer=setTimeout(()=>{jobs.delete(chat.id);complete(chat,`Here is a direction we can build on: ${text}\n\nThis is a simulated response so you can try the handoff.\n\n<<<SWITCHBOARD_HANDOFF>>>${JSON.stringify({summary:'The demo agent finished. Your project is ready for another decision.',decisions:[],next_action:'Try another prompt or mark this chat caught up.'})}`);},2800);jobs.set(chat.id,{demo:true,timer});return {nextId:nextAttention(state.chats,chat.id)};}
   let child;
