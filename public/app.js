@@ -2,6 +2,8 @@ import {renderMarkdown} from './local-files.js';
 import {draftStore,replyRequestId,choiceText,editDraft} from './drafts.js';
 let state={chats:[],ideas:[],connections:{}}, token='', selected=null, modalType=null, found=[], nextOffset=null, query='', sending=false, renderTimer;
 let discoverySnapshotId=null;
+let discoveryBatch={enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0};
+let discoverySearch='';
 let drafts;
 const switchingProvider=new Set();
 const signInSteps=new Map();
@@ -281,14 +283,31 @@ async function signInAction(provider,mode){
   }
 }
 
-async function discoverProjects(){openModal('discover','<h2>Pick up an existing thread.</h2><p class="modal-intro">Looking for recent local Codex and Claude projects…</p><div class="discovery-loading">Reading project history…</div>');try{const response=await api('/api/discover?refresh=1');if(modalType!=='discover'||!$('modal').open)return;found=response.projects;nextOffset=response.nextOffset;discoverySnapshotId=response.snapshotId;renderDiscovery();}catch(error){toast(error.message);}}
-function renderDiscovery(){openModal('discover',`<h2>Pick up an existing thread.</h2><p class="modal-intro">Select a chat to follow. Switchboard uses that provider on your account to summarize its completed turns with tools disabled. Replies here start a separate provider session in the same folder.</p><input id="discover-search" class="discover-search" aria-label="Search discovered projects" placeholder="Find a project or chat"><div class="discovery-list" id="discovery-list">${discoveryRows(found)}</div>${nextOffset!==null?'<button class="secondary-button" data-action="older-chats">Show older chats</button>':''}<p class="fine-print">Following Claude adds completion hooks to your Claude settings. Reopen an existing Claude session if it asks to reload hooks. You can pause watching from the project.</p>`);$('discover-search').oninput=e=>{$('discovery-list').innerHTML=discoveryRows(found.filter(p=>(p.title+' '+p.cwd).toLowerCase().includes(e.target.value.toLowerCase())));};}
+async function discoverProjects(){discoveryBatch={enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0};discoverySearch='';openModal('discover','<h2>Pick up an existing thread.</h2><p class="modal-intro">Looking for recent local Codex and Claude projects…</p><div class="discovery-loading">Reading project history…</div>');try{const response=await api('/api/discover?refresh=1');if(modalType!=='discover'||!$('modal').open)return;found=response.projects;nextOffset=response.nextOffset;discoverySnapshotId=response.snapshotId;renderDiscovery();}catch(error){toast(error.message);}}
+function filteredDiscovery(){return found.filter(p=>(p.title+' '+p.cwd).toLowerCase().includes(discoverySearch.toLowerCase()));}
+function renderDiscovery(focusSource=null){
+ const dialog=$('modal'),list=$('discovery-list');
+ const scroll=focusSource?{dialogTop:dialog.scrollTop,dialogLeft:dialog.scrollLeft,listTop:list?.scrollTop,listLeft:list?.scrollLeft}:null;
+ const batch=discoveryBatch;
+ const status=[batch.followed?`${batch.followed} followed`:'',batch.skipped?`${batch.skipped} already in workspace`:'',batch.errors.size?`${batch.errors.size} failed`:''].filter(Boolean).join(' · ');
+ openModal('discover',`<h2>Pick up an existing thread.</h2><p class="modal-intro">Select a chat to follow. Switchboard uses that provider on your account to summarize its completed turns with tools disabled. Replies here start a separate provider session in the same folder.</p><button class="secondary-button" data-action="finder-multiple" ${batch.busy?'disabled':''}>${batch.enabled?'Use single-chat mode':'Follow several chats'}</button>${batch.enabled?`<p class="form-hint">Choose new chats, then follow your selection. Existing projects keep their current watch settings.</p><button class="primary-button" data-action="finder-follow" ${batch.busy||!batch.selected.size?'disabled':''}>${batch.busy?'Following…':`Follow selected (${batch.selected.size})`}</button> ${batch.errors.size?`<button class="secondary-button" data-action="finder-retry" ${batch.busy?'disabled':''}>Retry failed (${batch.errors.size})</button>`:''} <button class="text-button" data-close ${batch.busy?'disabled':''}>Done</button>`:''}${status?`<p role="status">${esc(status)}</p>`:''}<input id="discover-search" class="discover-search" aria-label="Search discovered projects" placeholder="Find a project or chat" value="${esc(discoverySearch)}"><div class="discovery-list" id="discovery-list">${discoveryRows(filteredDiscovery())}</div>${nextOffset!==null?'<button class="secondary-button" data-action="older-chats">Show older chats</button>':''}<p class="fine-print">Following Claude adds completion hooks to your Claude settings. Reopen an existing Claude session if it asks to reload hooks. You can pause watching from the project.</p>`);
+ $('discover-search').oninput=e=>{discoverySearch=e.target.value;$('discovery-list').innerHTML=discoveryRows(filteredDiscovery());};
+ if(scroll){
+  const button=[...dialog.querySelectorAll('[data-finder-select]')].find(b=>b.dataset.finderSelect===focusSource);
+  button?.focus({preventScroll:true});
+  dialog.scrollTop=scroll.dialogTop;dialog.scrollLeft=scroll.dialogLeft;
+  const currentList=$('discovery-list');if(currentList){currentList.scrollTop=scroll.listTop;currentList.scrollLeft=scroll.listLeft;}
+ }
+}
+
 function discoveryRows(items){return items.length?items.map(p=>{
  const existing=state.chats.find(c=>c.sourceId===p.id);
  const status=existing?'Already in workspace'+(existing.watch?.enabled===false?' · Watching paused':''):'';
  const folder=p.cwd.split('/').slice(-2).join('/');
- const label=(existing?'Open ':'Follow ')+p.title+' · '+folder;
- return `<button class="discovery-row" data-import="${esc(p.id)}" aria-label="${esc(label)}"><span class="provider-glyph ${p.provider}">${p.provider==='codex'?'◎':'✳'}</span><span><strong>${esc(p.title)}</strong><small>${name(p.provider)} · ${esc(folder)}</small>${status?`<small>${status} · Open project</small>`:''}<p>${esc(p.summary.replace(/\s+/g,' ').slice(0,160))}</p></span><i>${existing?'↗':'＋'}</i></button>`;
+ const batch=discoveryBatch, picked=batch.selected.has(p.id),error=batch.errors.get(p.id);
+ const label=(batch.enabled?(existing?'Already followed ':picked?'Deselect ':'Select '):(existing?'Open ':'Follow '))+p.title+' · '+folder;
+ const control=batch.enabled?`data-finder-select="${esc(p.id)}" aria-pressed="${picked}" ${batch.busy||existing?'disabled':''}`:`data-import="${esc(p.id)}"`;
+ return `<button class="discovery-row" ${control} aria-label="${esc(label)}"><span class="provider-glyph ${p.provider}">${p.provider==='codex'?'◎':'✳'}</span><span><strong>${esc(p.title)}</strong><small>${name(p.provider)} · ${esc(folder)}</small>${status?`<small>${status}${batch.enabled?'':' · Open project'}</small>`:''}<p>${esc(p.summary.replace(/\s+/g,' ').slice(0,160))}</p>${picked?'<small>Selected</small>':''}${error?`<small role="alert">Could not follow: ${esc(error)}</small>`:''}</span><i>${batch.enabled?(existing?'✓':picked?'☑':'☐'):existing?'↗':'＋'}</i></button>`;
 }).join(''):'<p class="context-muted">No recent chats found. Start a new project to connect an agent.</p>';}
 async function selectDiscoveredProject(sourceId){
  const existing=state.chats.find(c=>c.sourceId===sourceId);
@@ -297,6 +316,29 @@ async function selectDiscoveredProject(sourceId){
  $('modal').close();
  if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);
  choose(chat.id);toast('Following this chat. Its results appear here.');
+}
+function toggleDiscoveredProject(sourceId){
+ const batch=discoveryBatch;
+ if(!batch.enabled||batch.busy||!found.some(p=>p.id===sourceId)||state.chats.some(c=>c.sourceId===sourceId))return;
+ if(batch.selected.has(sourceId)){batch.selected.delete(sourceId);batch.errors.delete(sourceId);}
+ else batch.selected.add(sourceId);
+ renderDiscovery(sourceId);
+}
+async function followDiscoveredProjects(retryOnly=false){
+ const batch=discoveryBatch;if(!batch.enabled||batch.busy)return;
+ const pending=[...batch.selected].filter(id=>!retryOnly||batch.errors.has(id));
+ if(!pending.length)return;
+ batch.busy=true;renderDiscovery();
+ try{
+  for(const id of pending){
+   if(state.chats.some(c=>c.sourceId===id)){batch.selected.delete(id);batch.errors.delete(id);batch.skipped++;continue;}
+   try{
+    const {chat}=await api('/api/import',{id,watch:true});
+    if(!state.chats.some(c=>c.id===chat.id||c.sourceId===id))state.chats.push(chat);
+    batch.selected.delete(id);batch.errors.delete(id);batch.followed++;
+   }catch(error){batch.errors.set(id,error.message);}
+  }
+ }finally{batch.busy=false;if(discoveryBatch===batch&&modalType==='discover'&&$('modal').open)renderDiscovery();}
 }
 function editText(type){const c=state.chats.find(c=>c.id===selected);if(!c)return;const label={decision:'Your decision',goal:'Project goal',requirements:'Pinned requirements'}[type];openModal(type,`<h2>${label}</h2><p class="modal-intro">This stays with the project and travels between agents.</p><form id="memory-form"><label>${label}<textarea name="text" ${type==='requirements'?'maxlength="6000"':'required'}>${type==='decision'?'':esc(c[type])}</textarea></label><button class="primary-button">Save →</button></form>`);$('memory-form').onsubmit=async e=>{e.preventDefault();try{await api(`/api/chats/${c.id}/update`,{[type]:new FormData(e.target).get('text')});$('modal').close();}catch(error){toast(error.message);}};}
 async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
@@ -308,14 +350,14 @@ async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
    const snapshot=discoverySnapshotId, offset=nextOffset;
    const page=await api('/api/discover?'+new URLSearchParams({offset,snapshot}));
    if(modalType!=='discover'||discoverySnapshotId!==snapshot||nextOffset!==offset)return;
-   const search=$('discover-search')?.value||'';
    found=[...new Map([...found,...page.projects].map(p=>[p.id,p])).values()];
    nextOffset=page.nextOffset;
    renderDiscovery();
-   $('discover-search').value=search;
-   $('discover-search').dispatchEvent(new Event('input'));
    return;
  }
+ if(kind==='finder-multiple'){if(discoveryBatch.busy)return;discoveryBatch.enabled=!discoveryBatch.enabled;renderDiscovery();return;}
+ if(kind==='finder-follow')return followDiscoveredProjects();
+ if(kind==='finder-retry')return followDiscoveredProjects(true);
  if(kind==='usage')return usage();if(kind==='new')return newProject();if(kind==='discover')return discoverProjects();if(kind==='connections')return connections();
  if(kind==='memory'&&c){openModal('memory',`<h2>Project memory</h2><p class="modal-intro">${esc(c.title)}</p><div class="context-kicker">THE DIRECTION</div><p class="goal">${esc(c.goal||'Set a goal for this project.')}</p><button class="text-button" data-action="goal">Edit goal ↗</button>${pinnedRequirements(c)}<div class="context-kicker memory-label">DECISIONS SO FAR</div><ul class="decision-list">${savedDecisions(c)||'<li>No decisions saved yet.</li>'}</ul><button class="text-button" data-action="decision">＋ Save a decision</button>`);return;}
  if(kind==='ideas'){location.hash='ideas';return choose(null);}if(kind==='next'){choose(next(selected));return;}
@@ -365,6 +407,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.dataset.confirmLogin){await signInAction(b.dataset.confirmLogin,'confirm');return;}
  if(b.dataset.login){await api('/api/connections/login',{provider:b.dataset.login});return;}
  if(b.dataset.revealFile){b.disabled=true;await api(`/api/chats/${b.dataset.revealProject}/reveal-file`,{path:b.dataset.revealFile});b.disabled=false;toast('Selected the file in Finder.');return;}
+ if(b.dataset.finderSelect){toggleDiscoveredProject(b.dataset.finderSelect);return;}
  if(b.dataset.import){b.disabled=true;await selectDiscoveredProject(b.dataset.import);return;}
  if(b.dataset.explore){const idea=state.ideas.find(i=>i.id===b.dataset.explore);if(idea)newProject(idea);}
  }catch(error){b.disabled=false;toast(error.message);}});

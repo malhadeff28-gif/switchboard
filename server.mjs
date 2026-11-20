@@ -144,6 +144,35 @@ function updatedProject(chat,data){
   return next;
 }
 function newChat(data){return {id:randomUUID(),title:data.title,goal:data.goal||'',cwd:data.cwd||root,provider:data.provider||'codex',permission:'read',status:'ready',readyAt:Date.now(),priority:0,summary:data.summary||'Set the direction for this project. Your first prompt will start the conversation.',decisions:[],nextAction:'What would you like to work on?',messages:data.messages||[],sessions:{},...data};}
+// Serialize imports per original so retries share one project and never resume a paused watch.
+const importJobs=new Map();
+function importSource(source,follow){
+  const previous=importJobs.get(source.id);
+  const pending=(previous?previous.catch(()=>{}):Promise.resolve()).then(async()=>{
+    let chat=state.chats.find(c=>c.sourceId===source.id);
+    const created=!chat;
+    if(chat && (!follow || chat.watch))return chat;
+    if(created){
+      chat=newChat({title:source.title,cwd:source.cwd,provider:source.provider,summary:source.summary,messages:source.messages.map(m=>({...m,id:randomUUID(),imported:true,sourceSession:source.sourceSession})),sourceId:source.id,sourceSession:source.sourceSession,nextAction:'Review the original response.'});
+      state.chats.push(chat);
+    }
+    try{
+      // Existing watch state belongs to the explicit pause/resume controls.
+      if(follow && !chat.watch)await monitor.watch(chat,source);
+      update({immediate:true});
+      return chat;
+    }catch(error){
+      if(created){
+        try{monitor.discard(chat,source);}catch{} // Preserve the initiating error if hook cleanup also fails.
+        state.chats=state.chats.filter(c=>c!==chat);
+        try{update({immediate:true});}catch{}
+      }
+      throw error;
+    }
+  });
+  importJobs.set(source.id,pending);
+  return pending.finally(()=>{if(importJobs.get(source.id)===pending)importJobs.delete(source.id);});
+}
 function stopJob(chatId,job) {
   killGroup(job.child);
   const timer=setTimeout(()=>{if(jobs.get(chatId)===job)killGroup(job.child,'SIGKILL');},3000);
@@ -366,10 +395,8 @@ const server=http.createServer(async(req,res)=>{
       }
       if(route==='/api/import'){
         const source=discoveredById.get(data.id)||(await discovery()).find(p=>p.id===data.id);if(!source)throw new Error('This project is no longer available. Refresh discovery.');
-        let chat=state.chats.find(c=>c.sourceId===source.id);
-        if(!chat){chat=newChat({title:source.title,cwd:source.cwd,provider:source.provider,summary:source.summary,messages:source.messages.map(m=>({...m,id:randomUUID(),imported:true,sourceSession:source.sourceSession})),sourceId:source.id,sourceSession:source.sourceSession,nextAction:'Review the original response.'});state.chats.push(chat);}
-        if(data.watch===true)await monitor.watch(chat,source);
-        update({immediate:true});send(res,201,{chat:publicChats().find(c=>c.id===chat.id)});return;
+        const chat=await importSource(source,data.watch===true);
+        send(res,201,{chat:publicChats().find(c=>c.id===chat.id)});return;
       }
       if(route==='/api/demo'){
         let demo=state.chats.filter(c=>c.demo);if(!demo.length){demo=[['Portfolio site','The first draft is ready. Choose whether to lead with your work or your story.','Which direction should the homepage take?'],['Research notes','Three themes emerged from the reading. We can turn them into a concise outline.','Would you like an outline or a deeper comparison?'],['Launch plan','A small pilot would let us test the idea with a clear success measure.','What would make the pilot worth doing?']].map(([title,summary,nextAction])=>newChat({title,summary,nextAction,demo:true,provider:'codex'}));state.chats.push(...demo);}update({immediate:true});send(res,200,{chat:demo[0]});return;
