@@ -47,6 +47,8 @@ The ideas shelf, manual usage snapshots, priorities, stop controls, and simulate
 
 ## Development and validation
 
+The hosted interface at `https://switchboard.us.com/app/` runs against the companion on the same computer. It needs HTTPS, a browser that allows an explicitly approved loopback connection, and the local pilot on port 4317. In the local app choose **Options → Open on website**, create a one-use link, and approve the browser connection. Use **Disconnect website** to revoke the pairing or `SWITCHBOARD_WEB_ENABLED=0` to disable it at launch. Connect the Codex and Claude Code CLIs on the Mac. The website never handles provider login codes, and it communicates with the local service directly. Drafts are separate between the website and local browser origins. Build the static app directory with `node scripts/package-website.mjs <site checkout>/app`.
+
 Requires Node 20 or later. Run `npm start` for a source checkout and `npm test` for regression tests. `npm run test:claude-local` exercises the installed Claude Code CLI against a local mock API. Live provider access requires a separate check. Environment overrides include `PORT`, `SWITCHBOARD_DATA_DIR`, `SWITCHBOARD_CODEX_BIN`, `SWITCHBOARD_CLAUDE_BIN`, and `SWITCHBOARD_EXCLUDE_SESSION`.
 
 Build a portable download with `python3 scripts/package.py linux-x64 --cache build/cache --dest build/downloads`. The builder checks the pinned official Node archive checksum and includes its license. Run `python3 scripts/check-package.py build/downloads/Switchboard-linux-x64.zip` on the matching OS and CPU to test extraction, launch, send, handoff, and data location. Add `--browser` for a desktop trial.

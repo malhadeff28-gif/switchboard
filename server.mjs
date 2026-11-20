@@ -6,6 +6,7 @@ import {pausedLifecycle} from './lib/paused-lifecycle.mjs';
 import {makeCard,rawCard,resultPayload} from './lib/handoffs.mjs';
 import {addEvidence,managedEvidence,note} from './lib/turns.mjs';
 import {lockWorkspace,workspaceIdentity} from './lib/workspace.mjs';
+import {hostedAccess,hostedRoute,webOrigin} from './lib/hosted-access.mjs';
 import http from 'node:http';
 import {readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, realpathSync} from 'node:fs';
 import {readFile} from 'node:fs/promises';
@@ -42,9 +43,17 @@ state.desktop ||= {enabled:false,queue:state.chats.filter(c=>c.sourceId?.startsW
 const clients=new Set(), jobs=new Map(), authJobs=new Map(), authErrors=new Map();
 const token=randomBytes(32).toString('hex');
 const port=Number(process.env.PORT || 4317);
+const localOrigins=[`http://127.0.0.1:${port}`,`http://localhost:${port}`];
+const web=hostedAccess(process.env.SWITCHBOARD_WEB_ENABLED==='1'||(port===4317&&process.env.SWITCHBOARD_WEB_ENABLED!=='0'));
 const commandEnv={...process.env,PATH:[path.dirname(process.execPath),process.env.PATH || ''].join(path.delimiter)};
 const binaries={};
 let connections={}, discovered=[], discoveryAt=0, persistenceTimer, storageError='';
+function webConnections(){
+  return Object.fromEntries(Object.entries(connections).map(([provider,status])=>[provider,{
+    installed:status.installed,signedIn:status.signedIn,lastResponse:status.lastResponse,
+    ...(status.connectionError?{connectionError:'Check the provider connection on this Mac.'}:{})
+  }]));
+}
 let nativeSources=[],nativeSourcesAt=0,nativeError=null,listenerState='paused',handoffChain=Promise.resolve();
 const nativeStatuses=new Map(),seenNativeEvents=new Set(),listener=new CodexSubmitListener();
 function desktopState(){return {...state.desktop,listenerState,error:nativeError,statuses:Object.fromEntries(nativeStatuses),queueDetails:state.desktop.queue.map(id=>{const s=nativeSources.find(s=>s.id===id);return {id,title:s?.title||id,status:nativeStatuses.get(id)||s?.desktopStatus||'unknown',summary:s?.summary||''};}),platform:process.platform,support:{codex:process.platform==='darwin',claude:false}};}
@@ -396,9 +405,30 @@ const server=http.createServer(async(req,res)=>{
     if(![`127.0.0.1:${port}`,`localhost:${port}`].includes(host)){send(res,403,{error:'Local access only.'});return;}
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     const url=new URL(req.url,`http://${host}`), route=url.pathname;
-    if(req.method!=='GET' && (req.headers['x-switchboard-token']!==token || (req.headers.origin && ![`http://127.0.0.1:${port}`,`http://localhost:${port}`].includes(req.headers.origin)))){send(res,403,{error:'Refresh Switchboard before continuing.'});return;}
+    const origin=req.headers.origin,fromWeb=web.accepts(origin);
+    if(origin&&!fromWeb&&!localOrigins.includes(origin)){send(res,403,{error:'Origin is not allowed.'});return;}
+    if(fromWeb){
+      const method=req.method==='OPTIONS'?req.headers['access-control-request-method']:req.method;
+      if(!hostedRoute(route,method)){send(res,403,{error:'Use the local app for this action.'});return;}
+      res.setHeader('Access-Control-Allow-Origin',webOrigin);
+      res.setHeader('Vary','Origin');
+      if(req.method==='OPTIONS'){
+        res.writeHead(204,{'Access-Control-Allow-Methods':method,'Access-Control-Allow-Headers':'Content-Type, X-Switchboard-Web-Session','Cache-Control':'no-store'});
+        res.end();return;
+      }
+      if(route==='/api/web/pair'){
+        const session=web.redeem((await body(req)).pair);
+        send(res,session?200:401,session?{session}:{error:'This pairing link has expired or was already used. Open a new link on this Mac.'});return;
+      }
+      if(!web.authorized(req.headers['x-switchboard-web-session'])){send(res,401,{error:'Pair the web app with Switchboard on this Mac.'});return;}
+    }else if(req.method!=='GET' && req.headers['x-switchboard-token']!==token){send(res,403,{error:'Refresh Switchboard before continuing.'});return;}
+    if(req.method==='POST'&&route==='/api/web/link'&&web.enabled&&!fromWeb){send(res,200,{url:web.link()});return;}
+    if(req.method==='POST'&&route==='/api/web/disconnect'&&web.enabled){web.disconnect();send(res,200,{ok:true});return;}
     if(route==='/api/health' && req.method==='GET'){send(res,200,{app:'switchboard',version,workspace});return;}
-    if(route==='/api/bootstrap' && req.method==='GET'){send(res,200,{...state,chats:publicChats(),connections,desktop:desktopState(),token,root,workspace,storageError,canRevealFiles:process.platform==='darwin'});return;}
+    if(route==='/api/bootstrap' && req.method==='GET'){
+      const snapshot={chats:publicChats(),ideas:state.ideas,usage:state.usage,connections:fromWeb?webConnections():connections,workspace,storageError,canRevealFiles:process.platform==='darwin',webEnabled:web.enabled};
+      send(res,200,fromWeb?snapshot:{...state,...snapshot,desktop:desktopState(),token,root});return;
+    }
     if(route==='/api/desktop' && req.method==='GET'){await nativeDiscovery(url.searchParams.has('refresh'));send(res,200,{...desktopState(),sources:nativeSources});return;}
     if(route==='/api/discover' && req.method==='GET'){
       const offset=Number(url.searchParams.get('offset')||0);
@@ -438,7 +468,7 @@ const server=http.createServer(async(req,res)=>{
         }
         update({immediate:true});send(res,200,{usage:state.usage});return;
       }
-      if(route==='/api/connections/refresh'){await checkConnections();send(res,200,connections);return;}
+      if(route==='/api/connections/refresh'){await checkConnections();send(res,200,fromWeb?webConnections():connections);return;}
       if(route==='/api/connections/desktop'){
         await openProviderDesktop(validProvider(data.provider));
         send(res,200,{ok:true});return;
@@ -531,7 +561,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'Unknown action.'});return;
     }
-    const assets={'/':'index.html','/app.js':'app.js','/drafts.js':'drafts.js','/local-files.js':'local-files.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
+    const assets={'/':'index.html','/app.js':'app.js','/drafts.js':'drafts.js','/local-files.js':'local-files.js','/web-session.js':'web-session.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
     if(req.method==='GET' && assets[route]){const types={'.html':'text/html','.js':'text/javascript','.css':'text/css'};res.writeHead(200,{'Content-Type':types[path.extname(assets[route])],'Cache-Control':'no-cache','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"});res.end(await readFile(path.join(root,'public',assets[route])));return;}
     send(res,404,{error:'Not found.'});
   }catch(error){send(res,error.status||400,{error:error.message});}

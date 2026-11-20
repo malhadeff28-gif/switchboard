@@ -8,7 +8,7 @@ const eventsSource=app.slice(app.indexOf('events.onmessage='));
 function harness(responses=[]){
  const calls=[],renders=[],closed=[],toasts=[];
  const state={workspace:'old-workspace',chats:[{id:'same-project'}]},draft={text:'Saved read-only draft',provider:'codex',turnId:'old-result'};
- const context=vm.createContext({state,selected:'same-project',token:'old-token',draft,renderTimer:null,render:()=>renders.push(true),fetch:async(route,options)=>{calls.push({route,options});const response=responses.shift();if(!response)throw Error('Unexpected request');return {status:response.status,ok:response.status>=200&&response.status<300,json:async()=>response.body};},events:{close:()=>closed.push(true)},toast:text=>toasts.push(text),clearTimeout(){},setTimeout:fn=>{fn();return 1;},updateConnectionCards(){}});
+ const context=vm.createContext({state,selected:'same-project',token:'old-token',webSession:'',draft,renderTimer:null,render:()=>renders.push(true),fetch:async(route,options)=>{calls.push({route,options});const response=responses.shift();if(!response)throw Error('Unexpected request');return {status:response.status,ok:response.status>=200&&response.status<300,json:async()=>response.body};},events:{close:()=>closed.push(true)},toast:text=>toasts.push(text),clearTimeout(){},setTimeout:fn=>{fn();return 1;},updateConnectionCards(){}});
  vm.runInContext(apiSource+'\n'+eventsSource,context);return {context,calls,renders,closed,toasts,state,draft};
 }
 test('SSE workspace swap leaves old selection/draft intact with persistent accessible recovery and mutation block',async()=>{

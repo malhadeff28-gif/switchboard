@@ -1,6 +1,8 @@
 import {renderMarkdown} from './local-files.js';
 import {draftStore,replyRequestId,choiceText,editDraft,sameDraft} from './drafts.js';
+import {clearWebSession,companionUrl,enterWebWorkspace,webRequest,webUpdates} from './web-session.js';
 let state={chats:[],ideas:[],connections:{}}, token='', selected=null, modalType=null, found=[], nextOffset=null, sending=false, renderTimer;
+let webSession='';
 let discoverySnapshotId=null;
 let discoveryBatch={enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0};
 let discoverySearch='';
@@ -18,6 +20,7 @@ function toast(text){$('toast').textContent=text;$('toast').classList.add('visib
 const workspaceMismatchMessage='A different Switchboard workspace is open. Reload this tab before sending.';
 function workspaceStatus(){
  if(state.workspaceMismatch)return '<div class="notice" role="alert"><strong>A different workspace is open.</strong> Saved drafts remain with the previous workspace. <button type="button" class="text-button" data-action="reload-workspace">Reload workspace ↗</button></div>';
+ if(state.webExpired)return `<div class="notice" role="alert">The website is disconnected. <a href="${companionUrl}">Open Switchboard on this Mac</a> to pair again.</div>`;
  return state.workspaceReconnecting?'<div class="notice" role="status"><strong>Reconnecting to local Switchboard…</strong> Your drafts stay saved while the app reconnects.</div>':'';
 }
 function markWorkspaceMismatch(){
@@ -30,8 +33,9 @@ function markWorkspaceReconnecting(){
 }
 async function api(route,data,retry=true) {
   if(data!==undefined&&state.workspaceMismatch)throw Error(workspaceMismatchMessage);
+  if(state.webExpired)throw Error('Open Switchboard on this Mac to pair again.');
   let response;
-  try{response=await fetch(route,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-Switchboard-Token':token},body:data===undefined?undefined:JSON.stringify(data)});}
+  try{response=webSession?await webRequest(route,{session:webSession,data}):await fetch(route,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-Switchboard-Token':token},body:data===undefined?undefined:JSON.stringify(data)});}
   catch{markWorkspaceReconnecting();throw Error('Could not reach local Switchboard. Your draft is saved. Retry when the app is running.');}
   const json=await response.json();
   if(response.status===403 && retry && data!==undefined && json.error==='Refresh Switchboard before continuing.') {
@@ -65,7 +69,7 @@ function projectPicker(){
 function workspaceMenu(c){
  const busy=c&&['running','stopping'].includes(c.status);
  openModal('menu',`<h2>Options</h2>${c?`<div class="menu-actions"><button data-action="memory">Project memory</button><button data-action="pin" ${c.priority?'aria-pressed="true"':'aria-pressed="false"'}>${c.priority?'Remove priority':'Prioritize project'}</button><button data-action="park" ${busy?'disabled':''}>Mark caught up</button>${c.watch?`<button data-action="${c.watch.enabled?'pause-watch':'resume-watch'}">${c.watch.enabled?'Pause watching':'Resume watching'}</button>`:''}</div>`:''}
- <div class="menu-actions"><button data-action="connections">Connections</button><button data-action="usage">Usage</button><button data-action="ideas">Ideas</button><a href="/desktop">Inside Codex</a><button data-action="demo">Try demo</button>${state.chats.some(x=>x.demo)?'<button data-action="clear-demo">Remove demo projects</button>':''}</div>
+ <div class="menu-actions"><button data-action="connections">Connections</button><button data-action="usage">Usage</button><button data-action="ideas">Ideas</button><a href="${webSession?companionUrl:''}/desktop">Inside Codex</a><button data-action="demo">Try demo</button>${state.chats.some(x=>x.demo)?'<button data-action="clear-demo">Remove demo projects</button>':''}${state.webEnabled&&!webSession?'<button data-action="web-link">Open on website</button>':''}${state.webEnabled?'<button data-action="web-disconnect">Disconnect website</button>':''}</div>
  <label class="auto-toggle"><input id="auto" type="checkbox" ${autoAdvance?'checked':''}> Move to the next ready project after sending</label>`);
 }
 function render({showReport=false,followReply=false}={}){
@@ -305,7 +309,7 @@ function chatView(c){
  <div class="reply-box"><label class="sr-only" for="prompt">Reply to ${recipient}</label><textarea id="prompt" placeholder="Message ${c.demo?'the demo':recipient}…" ${busy||sending?'disabled':''}>${esc(draft.text)}</textarea>
  <div class="reply-tools">${c.demo?'<span class="demo-tag">Simulated reply</span>':`<div class="provider-picker" role="group" aria-label="Reply provider">${['codex','claude'].map(p=>`<button id="reply-${p}" type="button" data-provider="${p}" aria-pressed="${provider===p}" ${busy||changing||sending?'disabled':''}>${name(p)}</button>`).join('')}</div>`}
  <select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select>
- ${busy?`<button type="button" class="secondary-button reply-stop" data-action="stop" ${c.status==='stopping'?'disabled':''}>Stop</button>`:`<button class="send-button" type="submit" aria-label="Send reply" title="Send reply (⌘ Enter)" ${sending||changing||state.workspaceMismatch?'disabled':''}><span aria-hidden="true">↑</span></button>`}</div></div>
+ ${busy?`<button type="button" class="secondary-button reply-stop" data-action="stop" ${c.status==='stopping'?'disabled':''}>Stop</button>`:`<button class="send-button" type="submit" aria-label="Send reply" title="Send reply (⌘ Enter)" ${sending||changing||state.workspaceMismatch||state.webExpired?'disabled':''}><span aria-hidden="true">↑</span></button>`}</div></div>
  ${busy?`<div class="reply-status" role="status">${esc(c.activity||(c.status==='stopping'?'Stopping…':'Working…'))}</div>`:''}</form></div>`;
 }
 function savedDecisions(c) {
@@ -400,6 +404,7 @@ function updateConnectionCards(){
 function providersHTML(){
   return ['codex','claude'].map(provider=>{
     const c=state.connections[provider]||{};
+    if(webSession)return `<div class="connection-card"><strong>${name(provider)}</strong>${c.signedIn?'<span class="signed-in">Connected</span>':`<a href="${companionUrl}/#connections">Sign in on this Mac</a>`}</div>`;
     const step=signInSteps.get(provider), busy=signInBusy.has(provider);
     const app=c.desktopApp;
     const fallback=c.terminalSignIn
@@ -534,6 +539,20 @@ function editText(type){const c=state.chats.find(c=>c.id===selected);if(!c)retur
 async function action(kind){if(kind==='reload-workspace'){location.reload();return;}const c=state.chats.find(c=>c.id===selected);try{
  if(kind==='projects')return projectPicker();
  if(kind==='menu')return workspaceMenu(c);
+ if(kind==='web-link'&&!webSession){
+   openModal('web-link','<h2>Open on switchboard.us.com</h2><p class="modal-intro">Pair this browser with Switchboard on this Mac. The site can read the workspace and send replies through your connected coding agents until you disconnect it.</p><button id="make-web-link" class="primary-button">Create pairing link</button>');
+   $('make-web-link').onclick=async e=>{
+     const button=e.currentTarget;button.disabled=true;
+     try{const {url}=await api('/api/web/link',{});if(modalType==='web-link'&&$('modal').open)openModal('web-link',`<h2>Pair this browser</h2><p class="modal-intro">This link works once and expires in five minutes.</p><a id="web-pair-link" class="primary-button" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open Switchboard website</a>`);}
+     catch(error){toast(error.message);}finally{button.disabled=false;}
+   };
+   return;
+ }
+ if(kind==='web-disconnect'){
+   await api('/api/web/disconnect',{});
+   if(webSession){clearWebSession();location.reload();}else{if($('modal').open)$('modal').close();toast('Website disconnected.');}
+   return;
+ }
  if(modalType==='menu'&&['pin','park','pause-watch','resume-watch','ideas','demo','clear-demo'].includes(kind))$('modal').close();
  if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render({showReport:true});return;}
  if(c&&kind==='show-watched-result'){showWatchedResult(c);return;}
@@ -604,14 +623,21 @@ document.addEventListener('change',async e=>{if(e.target.id==='auto'){autoAdvanc
 document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&$('composer')&&!$('modal').open){e.preventDefault();$('composer').requestSubmit();}if(e.altKey&&e.key.toLowerCase()==='n'&&!$('modal').open){const id=next(selected);if(id){e.preventDefault();choose(id);}}});
 $('modal').addEventListener('close',()=>modalType=null);
 $('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});
-const initial=await api('/api/bootstrap');drafts=draftStore(localStorage,initial.workspace);state=initial;token=initial.token;selected=location.hash==='#ideas'?null:localStorage.getItem('switchboard-selected')||next(null);if(selected&&!state.chats.some(c=>c.id===selected))selected=next(null);render();
+const initial=await (async()=>{
+ if(document.documentElement.dataset.mode!=='website')return api('/api/bootstrap');
+ const connection=await enterWebWorkspace($('app'));
+ if(!connection)return new Promise(()=>{});
+ webSession=connection.session;
+ return connection.state;
+})();
+drafts=draftStore(localStorage,initial.workspace);state=initial;token=initial.token;selected=location.hash==='#ideas'?null:localStorage.getItem('switchboard-selected')||next(null);if(selected&&!state.chats.some(c=>c.id===selected))selected=next(null);render();
 if(location.hash==='#connections')connections();
 window.addEventListener('hashchange',()=>{
   if(location.hash==='#ideas')choose(null);
   if(location.hash==='#connections'&&!$('modal').open)connections();
 });
 window.addEventListener('storage',e=>{if(drafts.owns(e.key))render();});
-const events=new EventSource('/api/events');
+const events=webSession?webUpdates(webSession):new EventSource('/api/events');
 events.onmessage=e=>{
   const snapshot=JSON.parse(e.data);
   if(snapshot.workspace!==state.workspace){
@@ -625,4 +651,4 @@ events.onmessage=e=>{
   renderTimer=setTimeout(render,60);
   updateConnectionCards();
 };
-events.onerror=()=>markWorkspaceReconnecting();
+events.onerror=error=>{if(error?.expired){state.webExpired=true;render();return;}markWorkspaceReconnecting();};
