@@ -262,7 +262,21 @@ async function signInAction(provider,mode){
 
 async function discoverProjects(){openModal('discover','<h2>Pick up an existing thread.</h2><p class="modal-intro">Looking for recent local Codex and Claude projects…</p><div class="discovery-loading">Reading project history…</div>');try{const response=await api('/api/discover?refresh=1');if(modalType!=='discover'||!$('modal').open)return;found=response.projects;nextOffset=response.nextOffset;discoverySnapshotId=response.snapshotId;renderDiscovery();}catch(error){toast(error.message);}}
 function renderDiscovery(){openModal('discover',`<h2>Pick up an existing thread.</h2><p class="modal-intro">Select a chat to follow. Switchboard uses that provider on your account to summarize its completed turns with tools disabled. Replies here start a separate provider session in the same folder.</p><input id="discover-search" class="discover-search" aria-label="Search discovered projects" placeholder="Find a project or chat"><div class="discovery-list" id="discovery-list">${discoveryRows(found)}</div>${nextOffset!==null?'<button class="secondary-button" data-action="older-chats">Show older chats</button>':''}<p class="fine-print">Following Claude adds completion hooks to your Claude settings. Reopen an existing Claude session if it asks to reload hooks. You can pause watching from the project.</p>`);$('discover-search').oninput=e=>{$('discovery-list').innerHTML=discoveryRows(found.filter(p=>(p.title+' '+p.cwd).toLowerCase().includes(e.target.value.toLowerCase())));};}
-function discoveryRows(items){return items.length?items.map(p=>`<button class="discovery-row" data-import="${esc(p.id)}"><span class="provider-glyph ${p.provider}">${p.provider==='codex'?'◎':'✳'}</span><span><strong>${esc(p.title)}</strong><small>${name(p.provider)} · ${esc(p.cwd.split('/').slice(-2).join('/'))}</small><p>${esc(p.summary.replace(/\s+/g,' ').slice(0,160))}</p></span><i>＋</i></button>`).join(''):'<p class="context-muted">No recent chats found. Start a new project to connect an agent.</p>';}
+function discoveryRows(items){return items.length?items.map(p=>{
+ const existing=state.chats.find(c=>c.sourceId===p.id);
+ const status=existing?'Already in workspace'+(existing.watch?.enabled===false?' · Watching paused':''):'';
+ const folder=p.cwd.split('/').slice(-2).join('/');
+ const label=(existing?'Open ':'Follow ')+p.title+' · '+folder;
+ return `<button class="discovery-row" data-import="${esc(p.id)}" aria-label="${esc(label)}"><span class="provider-glyph ${p.provider}">${p.provider==='codex'?'◎':'✳'}</span><span><strong>${esc(p.title)}</strong><small>${name(p.provider)} · ${esc(folder)}</small>${status?`<small>${status} · Open project</small>`:''}<p>${esc(p.summary.replace(/\s+/g,' ').slice(0,160))}</p></span><i>${existing?'↗':'＋'}</i></button>`;
+}).join(''):'<p class="context-muted">No recent chats found. Start a new project to connect an agent.</p>';}
+async function selectDiscoveredProject(sourceId){
+ const existing=state.chats.find(c=>c.sourceId===sourceId);
+ if(existing){$('modal').close();choose(existing.id);return;}
+ const {chat}=await api('/api/import',{id:sourceId,watch:true});
+ $('modal').close();
+ if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);
+ choose(chat.id);toast('Following this chat. Its results appear here.');
+}
 function editText(type){const c=state.chats.find(c=>c.id===selected);if(!c)return;const label={decision:'Your decision',goal:'Project goal',requirements:'Pinned requirements'}[type];openModal(type,`<h2>${label}</h2><p class="modal-intro">This stays with the project and travels between agents.</p><form id="memory-form"><label>${label}<textarea name="text" ${type==='requirements'?'maxlength="6000"':'required'}>${type==='decision'?'':esc(c[type])}</textarea></label><button class="primary-button">Save →</button></form>`);$('memory-form').onsubmit=async e=>{e.preventDefault();try{await api(`/api/chats/${c.id}/update`,{[type]:new FormData(e.target).get('text')});$('modal').close();}catch(error){toast(error.message);}};}
 async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
  if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render();return;}
@@ -329,7 +343,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.dataset.terminalLogin){await signInAction(b.dataset.terminalLogin,'terminal');return;}
  if(b.dataset.confirmLogin){await signInAction(b.dataset.confirmLogin,'confirm');return;}
  if(b.dataset.login){await api('/api/connections/login',{provider:b.dataset.login});return;}
- if(b.dataset.import){b.disabled=true;const {chat}=await api('/api/import',{id:b.dataset.import,watch:true});$('modal').close();if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);choose(chat.id);toast('Following this chat. Its results appear here.');return;}
+ if(b.dataset.import){b.disabled=true;await selectDiscoveredProject(b.dataset.import);return;}
  if(b.dataset.explore){const {chat}=await api('/api/ideas/start',{id:b.dataset.explore,provider:state.connections.codex?.signedIn?'codex':'claude'});if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);saveDraft(chat.id,`Help me think through this idea: ${chat.goal}\nAsk me a useful question and suggest a small first step.`);choose(chat.id);$('prompt').focus();}
  }catch(error){b.disabled=false;toast(error.message);}});
 document.addEventListener('submit',async e=>{const form=e.target.closest('form[data-auth-code]');if(!form)return;e.preventDefault();const input=form.elements.code,button=form.querySelector('button');button.disabled=true;try{await api('/api/connections/code',{provider:form.dataset.authCode,code:input.value});input.value='';toast('Code submitted. Waiting for the provider…');}catch(error){toast(error.message);button.disabled=false;}});
