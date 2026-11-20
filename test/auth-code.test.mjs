@@ -2,12 +2,43 @@ import {availablePort} from '../scripts/available-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {EventEmitter} from 'node:events';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {desktopApplication,openProviderDesktop} from '../lib/providers.mjs';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+test('desktop sign-in opens an installed provider app and leaves authentication with the provider',async()=>{
+ const home=path.join(os.tmpdir(),'switchboard home');
+ const application=path.join(home,'Applications','Claude.app');
+ const options={platform:'darwin',home,stat:file=>({isFile:()=>file===path.join(application,'Contents','Info.plist')})};
+ assert.equal(desktopApplication('codex',options),null);
+ assert.equal(desktopApplication('claude',{...options,platform:'linux'}),null);
+ let args;
+ await openProviderDesktop('claude',{
+  detect:provider=>desktopApplication(provider,options),
+  runner:(command,arguments_)=>{
+   args=[command,...arguments_];
+   const child=new EventEmitter();
+   queueMicrotask(()=>child.emit('close',0));
+   return child;
+  }
+ });
+ assert.deepEqual(args,['/usr/bin/open','-a',application]);
+ assert.throws(()=>openProviderDesktop('codex',{detect:()=>null}),/unavailable/);
+});
+
+test('Codex sign-in names the installed Mac app that will open',()=>{
+ const home=path.join(os.tmpdir(),'switchboard home');
+ for(const name of ['Codex','ChatGPT']){
+  const application=path.join(home,'Applications',name+'.app');
+  const options={platform:'darwin',home,stat:file=>({isFile:()=>file===path.join(application,'Contents','Info.plist')})};
+  assert.deepEqual(desktopApplication('codex',options),{name,application});
+ }
+});
 
 test('authorization code reaches the waiting CLI without being saved',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'switchboard-auth-')),bin=path.join(dir,'claude-fake'),data=path.join(dir,'data');

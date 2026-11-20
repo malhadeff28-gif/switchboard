@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,appendFile,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,appendFile,readFile,rename,rm} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {newWatch,pollTranscript,observeHook,note} from '../lib/turns.mjs';
-import {makeCard} from '../lib/handoffs.mjs';
-import {agentPrompt} from '../lib/core.mjs';
+import {makeCard,rawCard,sourceCard} from '../lib/handoffs.mjs';
+import {agentPrompt,attentionStatus} from '../lib/core.mjs';
 import {setClaudeHooks,drainHooks} from '../lib/hooks.mjs';
 import {findBinary} from '../lib/providers.mjs';
+import {createMonitor} from '../lib/monitor.mjs';
 
 const jsonl=rows=>rows.map(x=>JSON.stringify(x)).join('\n')+'\n';
 const lifecycle=(type,turn_id,extra={})=>({type:'event_msg',payload:{type,turn_id,...extra}});
@@ -30,6 +31,94 @@ test('watch checkpoints complete records and catches up once after restart',asyn
     assert.deepEqual(turns.map(t=>t.phase),['finished','interrupted','failed']);
   }finally{await rm(tmp,{recursive:true,force:true});}
 });
+test('Codex watches recover chat turns created through app tools and their command evidence',async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),'sb-watch-app-tool-'));
+  try{
+    const file=path.join(tmp,'chat.jsonl');
+    const watch=newWatch({provider:'codex',transcriptPath:file,sourceSession:'trial-chat'});
+    const turn_id='received-turn';
+    const root_turn_id='root-in-another-chat';
+    const start=lifecycle('task_started',turn_id,{root_turn_id,turn_attribution:{
+      turn_id,root_turn_id,parent_turn_id:root_turn_id,turn_trigger:'app_tool_create_thread',initiating_agent_path:null
+    }});
+    const command=lifecycle('item_completed',turn_id,{thread_id:'trial-chat',item:{
+      type:'CommandExecution',command:'python3 audit.py',exit_code:0,aggregated_output:'Total: $104.97'
+    }});
+    const transcript=jsonl([
+      start,
+      lifecycle('task_started','nested',{root_turn_id,turn_attribution:{initiating_agent_path:'child'}}),
+      lifecycle('task_complete','nested',{root_turn_id,last_agent_message:'Unrelated child work'}),
+      {...command,payload:{...command.payload,thread_id:'another-chat'}},
+      command,
+      lifecycle('task_complete',turn_id,{root_turn_id,last_agent_message:'The subscription audit is ready.'})
+    ]);
+    await writeFile(file,transcript);
+    watch.offset=Buffer.byteLength(transcript);
+    watch.initialized=true;
+    const turns=[];
+    await pollTranscript(watch,turn=>turns.push(turn));
+    await pollTranscript(watch,turn=>turns.push(turn));
+    assert.deepEqual(turns.map(turn=>turn.id),[turn_id]);
+    assert.equal(watch.phase,'finished');
+    assert.equal(turns[0].answer,'The subscription audit is ready.');
+    assert.deepEqual(turns[0].facts.filter(fact=>fact.kind==='tool').map(fact=>fact.text),[
+      'python3 audit.py\nExit 0\nTotal: $104.97'
+    ]);
+  }finally{await rm(tmp,{recursive:true,force:true});}
+});
+test('watch keeps the reply provider and catches up all paused turns and same-size replacements',async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-watch-resume-'));
+  const chat={id:'project',provider:'claude',status:'ready',messages:[]};
+  const file=path.join(dir,'chat.jsonl');
+  const source={provider:'codex',transcriptPath:file,sourceSession:'test'};
+  const turn=id=>jsonl([lifecycle('task_started',id),lifecycle('task_complete',id,{last_agent_message:'Result '+id})]);
+  const monitor=createMonitor({
+    state:{chats:[chat]},storage:dir,save(){},publish(){},isConnected:()=>false
+  });
+  try {
+    await writeFile(file,turn('a'));
+    await monitor.watch(chat,source);
+    monitor.pause(chat);
+    await appendFile(file,turn('b')+turn('c'));
+    await monitor.watch(chat,source);
+    assert.deepEqual(chat.turns.map(t=>t.id),['a','b','c']);
+    assert.equal(chat.provider,'claude');
+    assert.equal(chat.displayTurn,'c');
+    const replacement=path.join(dir,'replacement.jsonl');
+    await writeFile(replacement,turn('d')+turn('e')+turn('f'));
+    await rename(replacement,file);
+    await monitor.poll();
+    assert.deepEqual(chat.turns.map(t=>t.id),['a','b','c','d','e','f']);
+    await appendFile(file,jsonl([lifecycle('task_complete','f',{last_agent_message:'Corrected result'})]));
+    await monitor.poll();
+    assert.equal(chat.turns[5].answer,'Corrected result');
+    assert.equal(chat.messages[5].text,'Corrected result');
+  } finally {
+    monitor.close();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+test('an older watched result stays in history after a later Switchboard reply',async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-watch-history-'));
+  const file=path.join(dir,'chat.jsonl');
+  const managed={id:'reply',at:1000,phase:'finished',provider:'codex',origin:'managed',analysis:'ready',card:{decision:null,decisionFormatValid:true}};
+  const chat={id:'project',provider:'codex',status:'ready',displayTurn:managed.id,turns:[managed],messages:[{id:'reply-answer',at:1000,text:'The decision was implemented.'}]};
+  const monitor=createMonitor({state:{chats:[chat]},storage:dir,save(){},publish(){},isConnected:()=>false});
+  try{
+    const start={...lifecycle('task_started','earlier'),timestamp:new Date(500).toISOString()};
+    const finish={...lifecycle('task_complete','earlier',{last_agent_message:'Which plan would you like?'}),timestamp:new Date(700).toISOString()};
+    await writeFile(file,jsonl([start,finish]));
+    await monitor.watch(chat,{provider:'codex',transcriptPath:file,sourceSession:'test'});
+    assert.deepEqual(chat.turns.map(turn=>turn.id),['earlier','reply']);
+    assert.deepEqual(chat.messages.map(message=>message.id),['source-earlier','reply-answer']);
+    assert.equal(chat.displayTurn,'reply');
+    assert.equal(chat.unseenWatchedTurn,undefined);
+    assert.equal(attentionStatus(chat),'parked');
+  }finally{
+    monitor.close();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
 test('evidence links resolve to actual records and a cross-provider reply retains option order',()=>{
   const tool=note('tool','Test result','Exit 0: 12 tests passed'), prior=note('user','Constraint','Must retain nested fields');
   const turn={id:'turn',phase:'finished',provider:'codex',facts:[tool],earlier:[prior]};
@@ -38,7 +127,43 @@ test('evidence links resolve to actual records and a cross-provider reply retain
   const prompt=agentPrompt({messages:[],decisions:['Use UTF-8']},'take the second option','claude',turn);
   for(const s of ['12 tests passed','Must retain nested fields','Use UTF-8','Flattens nested data','Preserves nested data','take the second option'])assert.ok(prompt.includes(s));
   assert.ok(prompt.indexOf('CSV')<prompt.indexOf('JSON'));
-  assert.deepEqual(makeCard({summary:'Done',decision:null,options:[{label:'invent option',tradeoff:'none'}]},turn).options,[]);
+  assert.throws(()=>makeCard({summary:'Done',decision:null,options:[{label:'Invented',tradeoff:'None'}]},turn),/options without a decision/);
+});
+test('the original Codex response supplies its own question and choices when analysis is unavailable',()=>{
+  const result=note('tool','Command result','Total: $28');
+  const turn={id:'source',phase:'finished',facts:[result]};
+  const card=sourceCard({...turn,answer:'The weekend plan costs $28.\n\nWould you prefer an **indoor** plan or an **outdoor** plan?'});
+  assert.equal(card.decision,'Would you prefer an indoor plan or an outdoor plan?');
+  assert.deepEqual(card.options,[{label:'indoor',tradeoff:''},{label:'outdoor',tradeoff:''}]);
+  assert.ok(card.evidence.some(item=>item.id===result.id));
+  assert.equal(attentionStatus({status:'ready',displayTurn:turn.id,turns:[{...turn,card,analysis:'source'}]}),'ready');
+  const plain=sourceCard({...turn,answer:'Should the audit flag the largest plans or the unused plans?'});
+  assert.equal(plain.decision,'Should the audit flag the largest plans or the unused plans?');
+  assert.deepEqual(plain.options,[]);
+  assert.equal(sourceCard({...turn,answer:'The planner is ready.'}).decision,null);
+});
+test('only a well-formed explicit no-decision moves a project out of the attention queue',()=>{
+  const turn={id:'result',analysis:'ready',facts:[]};
+  const chat={status:'ready',displayTurn:turn.id,turns:[turn]};
+  turn.card=makeCard({summary:'Done',decision:null,options:[]},turn);
+  assert.equal(attentionStatus(chat),'parked');
+  for(const decision of [{question:'Which format?'},'',false,undefined]){
+    const payload={summary:'Pick which format',decision,options:[{label:'JSON',tradeoff:'Keeps nesting'}]};
+    assert.throws(()=>makeCard(payload,turn),/decision could not be read/i);
+  }
+  turn.card={decision:null};
+  assert.equal(attentionStatus(chat),'ready','cards from the older build need review');
+});
+test('older result carries original instructions even when evidence is full or analysis fails',()=>{
+  const prior=note('user','Earlier instruction','Never publish the fixture dataset');
+  const facts=Array.from({length:24},(_,i)=>note('tool','Test result','Fixture step '+i));
+  const turn={id:'old',at:100,phase:'finished',provider:'codex',answer:'Original answer',request:'Use a local export',facts,earlier:[prior]};
+  const chat={title:'Fixture',messages:[{role:'assistant',text:'Newer unrelated result',at:101}],requirements:'Always retain nested fields'};
+  for(const card of [rawCard(turn),makeCard({summary:'Old result',claims:facts.slice(1,11).map(f=>({text:f.text,sources:[f.id]})),decision:'Choose a format'},turn)]) {
+    const prompt=agentPrompt(chat,'Continue','claude',{...turn,card});
+    for(const text of ['Never publish the fixture dataset','Use a local export','Always retain nested fields'])assert.ok(prompt.includes(text));
+    assert.ok(!prompt.includes('Newer unrelated result'));
+  }
 });
 test('Claude hooks are scoped, persist offline, preserve unrelated settings and correlate delayed events',async()=>{
   const tmp=await mkdtemp(path.join(os.tmpdir(),'sb-hooks-')), prev=process.env.CLAUDE_CONFIG_DIR;
@@ -50,9 +175,17 @@ test('Claude hooks are scoped, persist offline, preserve unrelated settings and 
     const updated=JSON.parse(await readFile(path.join(config,'settings.json')));assert.equal(updated.hooks.Stop.length,2);
     const bridge=path.join(tmp,'claude-hook','record.cjs');
     for(const session_id of ['unselected','chosen'])execFileSync(process.execPath,[bridge],{input:JSON.stringify({session_id,hook_event_name:'Stop',last_assistant_message:'Ready'})});
+    await writeFile(path.join(tmp,'claude-hook','events','0.json'),'{');
     const received=[];drainHooks(tmp,h=>received.push(h));drainHooks(tmp,h=>received.push(h));assert.equal(received.length,1);
     const event=received[0],w={session:'chosen',phase:'working',current:{id:'new',startedAt:event.at+1000},previous:[{id:'prior',startedAt:event.at-500,request:'Review',facts:[]}],history:[]};
     assert.equal(observeHook(w,event).id,'prior');assert.equal(w.phase,'working');
+    w.previous[0].phase='interrupted';
+    assert.equal(observeHook(w,event),undefined);
+    const failure={...event,hook_event_name:'StopFailure',error:'Late failure'};
+    w.previous[0].phase='finished';
+    assert.equal(observeHook(w,failure),undefined);
+    w.previous[0].provisional=true;
+    assert.equal(observeHook(w,failure).phase,'failed');
     setClaudeHooks(tmp,[]);assert.deepEqual(JSON.parse(await readFile(path.join(config,'settings.json'))),settings);
   }finally{if(prev===undefined)delete process.env.CLAUDE_CONFIG_DIR;else process.env.CLAUDE_CONFIG_DIR=prev;await rm(tmp,{recursive:true,force:true});}
 });
@@ -63,4 +196,47 @@ test('a newly installed CLI is discoverable on refresh without restarting the ap
     assert.notEqual(findBinary('claude',{PATH:tmp}),target);
     await writeFile(target,'fixture',{mode:0o755});assert.equal(findBinary('claude',{PATH:tmp}),target);
   }finally{await rm(tmp,{recursive:true,force:true});}
+});
+
+test('initial watch reconciles its imported excerpt without collapsing later identical turns',async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-watch-excerpt-'));
+  const file=path.join(dir,'chat.jsonl');
+  const at=Date.parse('2026-11-20T01:00:00Z');
+  const answer='Completed. '+ 'x'.repeat(15000);
+  const snapshot={id:'excerpt',role:'assistant',imported:true,provider:'codex',text:answer.slice(0,14000),at:at+1000};
+  const untouched=[
+    {...snapshot,id:'earlier',at:at-1000},
+    {...snapshot,id:'other-provider',provider:'claude'},
+    {...snapshot,id:'other-session',sourceSession:'other'},
+    {...snapshot,id:'draft',imported:false}
+  ];
+  const chat={id:'project',sourceSession:'test',status:'ready',messages:[...untouched,snapshot]};
+  const options={state:{chats:[chat]},storage:dir,save(){},publish(){},isConnected:()=>false};
+  let monitor=createMonitor(options);
+  const event=(type,id,offset,text)=>({...lifecycle(type,id,text?{last_agent_message:text}:{}),timestamp:new Date(at+offset).toISOString()});
+  try{
+    await writeFile(file,jsonl([event('task_started','first',0),event('task_complete','first',2000,answer)]));
+    await monitor.watch(chat,{provider:'codex',sourceSession:'test',transcriptPath:file});
+    assert.equal(chat.messages.length,5);
+    assert.equal(snapshot.id,'source-first');
+    assert.equal(snapshot.at,at+2000);
+    assert.equal(snapshot.text,answer);
+    assert.deepEqual(chat.messages.filter(m=>untouched.includes(m)),untouched);
+    await appendFile(file,jsonl([event('task_started','second',3000),event('task_complete','second',4000,answer)]));
+    await monitor.poll();
+    assert.equal(chat.messages.filter(m=>m.text===answer).length,2);
+    await appendFile(file,jsonl([event('task_complete','first',5000,'Corrected first answer')]));
+    await monitor.poll();
+    assert.equal(snapshot.text,'Corrected first answer');
+    assert.equal(chat.messages.length,6);
+    // Upgrade an existing saved project with the original duplicate intact.
+    const second=chat.turns.find(t=>t.id==='second');
+    chat.messages.push({...snapshot,id:'legacy-excerpt',text:answer.slice(0,14000),at:at+3500});
+    monitor.close();
+    monitor=createMonitor(options);
+    assert.ok(second);
+    assert.equal(chat.messages.some(m=>m.id==='legacy-excerpt'),false);
+    assert.equal(chat.messages.filter(m=>m.id==='source-second').length,1);
+    assert.equal(chat.messages.length,6);
+  }finally{monitor.close();await rm(dir,{recursive:true,force:true});}
 });

@@ -49,3 +49,8 @@ jobs:
         if: runner.os != 'Windows'
       - run: python scripts/check-package.py downloads/Switchboard-${{ matrix.target }}.zip
         if: runner.os == 'Windows'
+      - name: Check the Apple silicon app bundle
+        if: matrix.target == 'darwin-arm64' && !github.event.release.tag_name && !inputs.release_tag
+        run: |
+          python3 scripts/package-mac.py downloads/Switchboard-darwin-arm64.zip --dest downloads
+          python3 scripts/check-package.py downloads/*-local-test-arm64.zip

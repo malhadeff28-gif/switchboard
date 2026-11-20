@@ -26,8 +26,11 @@ let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+
  if(bad){emit({type:'result',is_error:true,errors:['OAuth session expired']});return;}
  const resumed=provider==='codex'?args.includes('resume')&&args.includes(session):args.includes('--resume')&&args.includes(session);
  const hasContext=input.includes('blue-otter-147');
+ const hasConfirmedDecision=input.includes('Use the confirmed plan');
+ const hasPinnedRequirement=input.includes('Keep the original export read-only');
  const answer=(hasContext?'blue-otter-147':'missing-context')+(resumed?' resumed':' new')+'\n<<<SWITCHBOARD_HANDOFF>>>'+JSON.stringify({summary:'Remember blue-otter-147',decisions:['Use the blue plan'],next_action:'Choose the next step'});
- if(provider==='codex')emit({type:'item.completed',item:{type:'agent_message',text:answer}});else emit({type:'result',is_error:false,result:answer,session_id:session});
+ const reply=(hasConfirmedDecision&&hasPinnedRequirement?'confirmed context received: ':'')+answer;
+ if(provider==='codex')emit({type:'item.completed',item:{type:'agent_message',text:reply}});else emit({type:'result',is_error:false,result:reply,session_id:session});
 });`;
  const codex=path.join(dir,'codex-fake'),claude=path.join(dir,'claude-fake');
  await Promise.all([writeFile(codex,fixture,{mode:0o755}),writeFile(claude,fixture,{mode:0o755})]);
@@ -49,8 +52,12 @@ let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+
   assert.equal(connection.loginError,'');assert.equal(connection.signedIn,true);
 
   const {chat}=await post('/api/chats',{title:'Test',goal:'test',cwd:project,provider:'codex'});
-  let c=await turn(chat.id,'Remember blue-otter-147');assert.match(c.messages.at(-1).text,/blue-otter-147 new/);assert.equal(c.nextAction,'Choose the next step');assert.deepEqual(c.decisions,['Use the blue plan']);assert.equal(c.sessions.codex,'codex-session');
-  await post(`/api/chats/${chat.id}/update`,{provider:'claude'});c=await turn(chat.id,'Recall the code');assert.match(c.messages.at(-1).text,/blue-otter-147 new/);assert.equal(c.sessions.claude,'claude-session');
+  let c=await turn(chat.id,'Remember blue-otter-147');assert.match(c.messages.at(-1).text,/blue-otter-147 new/);assert.equal(c.nextAction,'Choose the next step');assert.deepEqual(c.decisions,[]);assert.equal(c.sessions.codex,'codex-session');
+  await post(`/api/chats/${chat.id}/update`,{provider:'claude',decision:'Use the confirmed plan',requirements:'Keep the original export read-only'});
+  c=await turn(chat.id,'Recall the code');
+  assert.match(c.messages.at(-1).text,/confirmed context received: blue-otter-147 new/);
+  assert.deepEqual(c.confirmedDecisions,['Use the confirmed plan']);
+  assert.equal(c.sessions.claude,'claude-session');
   await post(`/api/chats/${chat.id}/update`,{provider:'codex'});c=await turn(chat.id,'Recall the code');assert.match(c.messages.at(-1).text,/blue-otter-147 resumed/);
   await post(`/api/chats/${chat.id}/update`,{provider:'claude'});c=await turn(chat.id,'Recall the code');assert.match(c.messages.at(-1).text,/blue-otter-147 resumed/);
   const second=(await post('/api/chats',{title:'Auth error',cwd:project,provider:'claude'})).chat;c=await turn(second.id,'FORCE_AUTH_FAILURE');assert.match(c.error,/OAuth session expired/);assert.equal(c.sessions.claude,undefined);

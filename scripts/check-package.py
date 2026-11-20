@@ -19,11 +19,13 @@ def check(archive, browser=False):
             with zipfile.ZipFile(archive) as bundle: bundle.extractall(dest)
         else:
             subprocess.run(["unzip","-q",str(archive),"-d",str(dest)],check=True)
-        root=dest/"Switchboard"
+        app=dest/"Switchboard.app"
+        mac_app=app.exists()
+        root=app/"Contents"/"Resources" if mac_app else dest/"Switchboard"
         with socket.socket() as s:
             s.bind(("127.0.0.1",0)); port=s.getsockname()[1]
         native=os.name=="nt"
-        launcher=next(root.glob("Start Switchboard.*"))
+        launcher=app/"Contents"/"MacOS"/"Switchboard" if mac_app else next(root.glob("Start Switchboard.*"))
         cmd=["cmd.exe","/d","/c",launcher.name] if native else [str(launcher)]
         # On Windows cmd.exe needs an explicitly quoted batch filename with spaces.
         if native: cmd='cmd.exe /d /c ""'+str(launcher)+'""'
@@ -41,6 +43,8 @@ def check(archive, browser=False):
                 except OSError: time.sleep(.15)
             else: raise RuntimeError("Launcher timed out")
             boot=request("/api/bootstrap"); assert not boot["chats"]
+            version=json.loads((root/"package.json").read_text(encoding="utf-8"))["version"]
+            assert request("/api/health")["version"]==version
             with urllib.request.urlopen(url) as r: assert "Switchboard" in r.read().decode()
             sample=request("/api/demo",{},boot["token"])["chat"]
             result=request("/api/chats/"+sample["id"]+"/send",{"text":"Pilot check"},boot["token"])
@@ -52,13 +56,17 @@ def check(archive, browser=False):
             assert chat["turns"][-1]["phase"]=="finished"
             assert (dest/"User Data"/"workspace.json").is_file()
             assert not (root/".local").exists()
-            print("PASS: extracted archive, OS launcher, bundled runtime, first run, send, handoff, external data directory",flush=True)
         finally:
             if native: subprocess.run(["taskkill","/pid",str(proc.pid),"/t","/f"],capture_output=True)
+            elif mac_app and proc.poll() is None: proc.terminate()
             else:
                 try: os.killpg(proc.pid,signal.SIGTERM)
                 except ProcessLookupError: pass
             proc.wait(timeout=15)
+            if mac_app:
+                assert proc.returncode == 0, "Switchboard.app failed to quit cleanly"
+                with socket.socket() as s:
+                    assert s.connect_ex(("127.0.0.1",port)) != 0, "App server survived launcher quit"
             if native:
                 # taskkill and cmd can return before Windows releases the child image.
                 deadline=time.monotonic()+10
@@ -69,6 +77,7 @@ def check(archive, browser=False):
                     except PermissionError:
                         if time.monotonic()>=deadline: raise
                         time.sleep(.15)
+        print("PASS: extracted archive, OS launcher, bundled runtime, first run, send, handoff, external data directory, and shutdown",flush=True)
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)

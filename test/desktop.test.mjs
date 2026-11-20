@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,appendFile,rm} from 'node:fs/promises';
 import path from 'node:path';
@@ -29,5 +30,38 @@ test('live file follower ignores old submissions and detects a fragmented new pr
   const complete=Buffer.from(JSON.stringify({type:'event_msg',timestamp:new Date().toISOString(),payload:{type:'task_complete',turn_id:'new',root_turn_id:'new',last_agent_message:'Résumé ready. ✔'}})+'\n');const split=complete.indexOf(Buffer.from('é'))+1;
   await appendFile(file,complete.subarray(0,split));await listener.poll();assert.equal(events.length,1);await appendFile(file,complete.subarray(split));await listener.poll();for(let n=0;n<30&&events.length<2;n++)await new Promise(r=>setTimeout(r,10));assert.equal(events[1].kind,'complete');assert.equal(events[1].summary,'Résumé ready. ✔');
   listener.stop();await appendFile(file,JSON.stringify(started('after-pause'))+'\n');await listener.poll();assert.equal(events.length,2);
+ }finally{listener.stop();await rm(dir,{recursive:true,force:true});}
+});
+
+const appStarted=(turn='received')=>({type:'event_msg',payload:{type:'task_started',turn_id:turn,root_turn_id:'sender-root',turn_attribution:{turn_id:turn,root_turn_id:'sender-root',parent_turn_id:'sender-root',turn_trigger:'app_tool_send_message',initiating_agent_path:null}}});
+const appComplete=(turn='received')=>({type:'event_msg',payload:{type:'task_complete',turn_id:turn,root_turn_id:'sender-root',last_agent_message:'Ready'}});
+test('native attributed turns update readiness without triggering a composer handoff',()=>{
+ const state={};assert.equal(desktopEvent(appStarted(),meta,state).kind,'working');
+ assert.equal(desktopEvent({...appComplete('foreign'),payload:{...appComplete('foreign').payload,thread_id:'another-chat'}},meta,state),null);
+ const nested=appStarted('nested');nested.payload.turn_attribution.initiating_agent_path='child';
+ assert.equal(desktopEvent(nested,meta,state),null);assert.equal(desktopEvent(appComplete('nested'),meta,state),null);
+ assert.equal(state.status,'working');assert.equal(desktopEvent(appComplete(),meta,state).kind,'complete');assert.equal(state.status,'ready');
+ assert.equal(desktopEvent(appComplete(),meta,{}),null);
+ const tail={};desktopEvent({type:'event_msg',payload:{type:'item_completed',turn_id:'received',thread_id:id}},meta,tail);
+ assert.equal(desktopEvent(appComplete(),meta,tail).kind,'complete');
+ const ambiguous={};desktopEvent({type:'turn_context',payload:{turn_id:'received'}},meta,ambiguous);assert.equal(desktopEvent(appComplete(),meta,ambiguous),null);
+ const foreign={};desktopEvent({type:'turn_context',payload:{turn_id:'received',thread_id:'foreign'}},meta,foreign);
+ assert.equal(desktopEvent(appComplete(),meta,foreign),null);
+ const invalid=appStarted();invalid.payload.turn_attribution.turn_id='other';assert.equal(desktopEvent(invalid,meta,{}),null);
+});
+test('listener seeds existing attributed context without emitting a submission',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'switchboard-attributed-')),file=path.join(dir,'sample.jsonl');
+ const listener=new CodexSubmitListener({root:dir,pollMs:10000}),events=[];listener.on('event',e=>events.push(e));
+ try{
+  await writeFile(file,[{type:'session_meta',payload:meta},appStarted()].map(JSON.stringify).join('\n')+'\n');
+  await listener.start();assert.deepEqual(events,[]);
+  const completed=once(listener,'event',{signal:AbortSignal.timeout(5000)});
+  await appendFile(file,JSON.stringify(appComplete())+'\n');await listener.poll();
+  assert.equal((await completed)[0].kind,'complete');
+  assert.deepEqual(events.map(e=>e.kind),['complete']);
+  const working=once(listener,'event',{signal:AbortSignal.timeout(5000)});
+  await appendFile(file,JSON.stringify(appStarted('followup'))+'\n');await listener.poll();
+  assert.equal((await working)[0].kind,'working');
+  assert.deepEqual(events.map(e=>e.kind),['complete','working']);
  }finally{listener.stop();await rm(dir,{recursive:true,force:true});}
 });

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,appendFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,appendFile,utimes,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {discover} from '../lib/discovery.mjs';
+import {discover,discoverPage,discoverySnapshot} from '../lib/discovery.mjs';
 test('bounded discovery finds the final desktop handoff and excludes the current session',async()=>{
  const home=await mkdtemp(path.join(os.tmpdir(),'switchboard-history-'));
  const previous=process.env.CODEX_HOME;delete process.env.CODEX_HOME;
@@ -27,5 +27,44 @@ test('bounded discovery finds the final desktop handoff and excludes the current
   await appendFile(path.join(dir,'active.jsonl'),'\n'+JSON.stringify({type:'event_msg',payload:{type:'task_complete',turn_id:'one',root_turn_id:'one'}})+'\n');
   assert.equal((await discover({home,exclude:'unrelated'})).find(x=>x.sourceSession===activeId).desktopStatus,'ready');
   assert.equal((await discover({home,exclude:'sample'})).length,3);
+ }finally{if(previous!==undefined)process.env.CODEX_HOME=previous;await rm(home,{recursive:true,force:true});}
+});
+test('discovery pagination keeps a stable order while the source chats change',async()=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'switchboard-discovery-order-'));
+ const previous=process.env.CODEX_HOME;delete process.env.CODEX_HOME;
+ try {
+  const dir=path.join(home,'.codex','sessions');await mkdir(dir,{recursive:true});
+  for(const [id,time] of [['a',300],['b',200],['c',100]]){
+   const file=path.join(dir,id+'.jsonl');
+   const rows=[{type:'session_meta',payload:{id,cwd:home}},{type:'response_item',payload:{type:'message',role:'user',content:id}}];
+   await writeFile(file,rows.map(row=>JSON.stringify(row)).join('\n'));
+   await utimes(file,time,time);
+  }
+  const options={exclude:null,snapshot:await discoverySnapshot(home),limit:1};
+  assert.equal((await discoverPage(options)).projects.find(p=>p.provider==='codex').sourceSession,'a');
+  await utimes(path.join(dir,'c.jsonl'),400,400);
+  assert.equal((await discoverPage({...options,offset:1})).projects.find(p=>p.provider==='codex').sourceSession,'b');
+  assert.equal((await discoverPage({...options,offset:2})).projects.find(p=>p.provider==='codex').sourceSession,'c');
+ } finally {if(previous!==undefined)process.env.CODEX_HOME=previous;await rm(home,{recursive:true,force:true});}
+});
+test('native discovery uses only confirmed lifecycle in its tail for attributed app chats',async()=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'switchboard-attributed-discovery-'));
+ const previous=process.env.CODEX_HOME;delete process.env.CODEX_HOME;
+ try{
+  const dir=path.join(home,'.codex','sessions');await mkdir(dir,{recursive:true});
+  const start=turn=>({type:'event_msg',payload:{type:'task_started',turn_id:turn,root_turn_id:'sender',turn_attribution:{turn_id:turn,root_turn_id:'sender',parent_turn_id:'sender',turn_trigger:'app_tool_create_thread',initiating_agent_path:null}}});
+  const complete=turn=>({type:'event_msg',payload:{type:'task_complete',turn_id:turn,root_turn_id:'sender'}});
+  const padding={type:'response_item',payload:{type:'function_call_output',output:'x'.repeat(220000)}};
+  const cases=[
+   ['finished',[start('own'),complete('own')],'ready'],
+   ['working',[start('own')],'working'],
+   ['context',[start('old'),padding,{type:'event_msg',payload:{type:'item_completed',turn_id:'own',thread_id:'context'}},complete('own')],'ready'],
+   ['unknown',[start('own'),padding,complete('own')],'unknown'],
+   ['nested',[start('own'),{...start('nested'),payload:{...start('nested').payload,turn_attribution:{...start('nested').payload.turn_attribution,initiating_agent_path:'child'}}},complete('nested')],'working'],
+   ['foreign',[start('own'),{...complete('own'),payload:{...complete('own').payload,thread_id:'another-chat'}}],'working']
+  ];
+  for(const [id,rows] of cases)await writeFile(path.join(dir,id+'.jsonl'),[{type:'session_meta',payload:{id,cwd:home,originator:'Codex Desktop',source:'vscode'}},{type:'response_item',payload:{type:'message',role:'user',content:'Trial'}},...rows].map(JSON.stringify).join('\n'));
+  const found=await discover({home,exclude:null});
+  for(const [id,,expected]of cases)assert.equal(found.find(p=>p.sourceSession===id).desktopStatus,expected,id);
  }finally{if(previous!==undefined)process.env.CODEX_HOME=previous;await rm(home,{recursive:true,force:true});}
 });
