@@ -18,15 +18,22 @@ function next(exclude){return ready().find(c=>c.id!==exclude)?.id||null;}
 function toast(text){$('toast').textContent=text;$('toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.remove('visible'),4200);}
 const workspaceMismatchMessage='A different Switchboard workspace is open. Reload this tab before sending.';
 function workspaceStatus(){
- return state.workspaceMismatch?'<div class="notice" role="alert"><strong>A different workspace is open.</strong> Saved drafts remain with the previous workspace. <button type="button" class="text-button" data-action="reload-workspace">Reload workspace ↗</button></div>':'';
+ if(state.workspaceMismatch)return '<div class="notice" role="alert"><strong>A different workspace is open.</strong> Saved drafts remain with the previous workspace. <button type="button" class="text-button" data-action="reload-workspace">Reload workspace ↗</button></div>';
+ return state.workspaceReconnecting?'<div class="notice" role="status"><strong>Reconnecting to local Switchboard…</strong> Your drafts stay saved while the app reconnects.</div>':'';
 }
 function markWorkspaceMismatch(){
  if(state.workspaceMismatch)return;
  state.workspaceMismatch=true;render();
 }
+function markWorkspaceReconnecting(){
+ if(state.workspaceMismatch||state.workspaceReconnecting)return;
+ state.workspaceReconnecting=true;if(state.workspace)render();
+}
 async function api(route,data,retry=true) {
   if(data!==undefined&&state.workspaceMismatch)throw Error(workspaceMismatchMessage);
-  const response=await fetch(route,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-Switchboard-Token':token},body:data===undefined?undefined:JSON.stringify(data)});
+  let response;
+  try{response=await fetch(route,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-Switchboard-Token':token},body:data===undefined?undefined:JSON.stringify(data)});}
+  catch{markWorkspaceReconnecting();throw Error('Could not reach local Switchboard. Your draft is saved. Retry when the app is running.');}
   const json=await response.json();
   if(response.status===403 && retry && data!==undefined && json.error==='Refresh Switchboard before continuing.') {
     const connection=await api('/api/bootstrap');
@@ -489,10 +496,10 @@ events.onmessage=e=>{
     markWorkspaceMismatch();
     return;
   }
-  state={...state,...snapshot};
+  state={...state,...snapshot,workspaceReconnecting:false};
   if(selected&&!state.chats.some(c=>c.id===selected))selected=null;
   clearTimeout(renderTimer);
   renderTimer=setTimeout(render,60);
   updateConnectionCards();
 };
-events.onerror=()=>{if(!state.workspaceMismatch)toast('Reconnecting to your local workspace…');};
+events.onerror=()=>markWorkspaceReconnecting();

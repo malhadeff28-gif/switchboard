@@ -28,14 +28,31 @@ test('mutation token refresh uses same persistent mismatch state and never retri
 test('ordinary same-workspace refresh and reconnect retain prior behavior without warning',async()=>{
  const h=harness([{status:403,body:{error:'Refresh Switchboard before continuing.'}},{status:200,body:{workspace:'old-workspace',token:'refreshed-token'}},{status:202,body:{accepted:true}}]);
  const response=await h.context.api('/api/chats/same-project/send',{text:'Draft'});assert.equal(response.accepted,true);assert.equal(h.calls.length,3);assert.equal(h.calls[2].options.headers['X-Switchboard-Token'],'refreshed-token');assert.equal(h.context.workspaceStatus(),'');
- h.context.events.onerror();assert.match(h.toasts[0],/Reconnecting/);
+ h.context.events.onerror();assert.match(h.context.workspaceStatus(),/Reconnecting to local Switchboard/);assert.deepEqual(h.toasts,[]);
  h.context.events.onmessage({data:JSON.stringify({workspace:'old-workspace',chats:[{id:'same-project',title:'Updated'}]})});assert.equal(h.closed.length,0);assert.equal(h.context.state.chats[0].title,'Updated');assert.equal(h.context.workspaceStatus(),'');
 });
 test('known mismatch disables Send while preserving editable draft and blocks programmatic composer submission',async()=>{
  const h=harness(),c={id:'same-project',title:'Trail',provider:'codex',status:'ready',permission:'read',messages:[]};
  Object.assign(h.context,{switchingProvider:new Set(),sending:false,autoAdvance:false,name:()=> 'Codex',esc:s=>String(s??''),icon:()=>'',replyProvider:()=> 'codex',usageLabel:()=>'',turnStatus:()=>'',watchedResultToReview:()=>null,watchedResultNotice:()=>'',turnView:()=>'',replyTarget:()=> 'Original result',drafts:{read:()=>h.draft}});
  const chatView=app.slice(app.indexOf('function chatView('),app.indexOf('function savedDecisions('));vm.runInContext(chatView,h.context);
- assert.doesNotMatch(h.context.chatView(c),/class="send-button"[^>]*disabled/);h.context.state.workspaceMismatch=true;
+ h.context.state.workspaceReconnecting=true;assert.doesNotMatch(h.context.chatView(c),/class="send-button"[^>]*disabled/);h.context.state.workspaceMismatch=true;
  const html=h.context.chatView(c);assert.match(html,/class="send-button"[^>]*disabled/);assert.match(html,/Saved read-only draft/);assert.doesNotMatch(html,/<textarea id="prompt"[^>]*disabled/);
  const submit=app.slice(app.indexOf('async function submitPrompt('),app.indexOf('async function saveIdea('));vm.runInContext(submit,h.context);await h.context.submitPrompt({preventDefault(){}});assert.equal(h.calls.length,0);
+});
+test('repeated outage errors show one persistent reconnect state; same-workspace SSE recovers without resend',async()=>{
+ const h=harness(),before=JSON.stringify(h.draft);
+ h.context.events.onerror();h.context.events.onerror();assert.equal(h.renders.length,1);assert.match(h.context.workspaceStatus(),/role="status"/);assert.match(h.context.workspaceStatus(),/Reconnecting to local Switchboard/);assert.deepEqual(h.toasts,[]);
+ h.context.fetch=async()=>{h.calls.push('failed');throw TypeError('Failed to fetch');};
+ await assert.rejects(h.context.api('/api/chats/same-project/send',{text:h.draft.text}),/Could not reach local Switchboard.*Your draft is saved/);
+ assert.equal(h.renders.length,1);assert.equal(h.calls.length,1);assert.equal(JSON.stringify(h.draft),before);assert.equal(h.context.selected,'same-project');
+ h.context.events.onmessage({data:JSON.stringify({workspace:'old-workspace',chats:[{id:'same-project'}]})});assert.equal(h.context.workspaceStatus(),'');assert.equal(h.calls.length,1);assert.equal(JSON.stringify(h.draft),before);
+});
+test('fetch-only outage gets app feedback and mismatch takes precedence over reconnect status',async()=>{
+ const h=harness();h.context.fetch=async()=>{throw TypeError('Load failed');};
+ await assert.rejects(h.context.api('/api/chats/same-project/send',{text:h.draft.text}),/Could not reach local Switchboard/);assert.match(h.context.workspaceStatus(),/Reconnecting/);assert.equal(h.renders.length,1);
+ h.context.markWorkspaceMismatch();const warning=h.context.workspaceStatus();assert.match(warning,/different workspace/);assert.doesNotMatch(warning,/Reconnecting/);h.context.events.onerror();assert.equal(h.renders.length,2);assert.equal(h.context.workspaceStatus(),warning);
+});
+test('an SSE interruption does not block a deliberate HTTP retry that still works',async()=>{
+ const h=harness([{status:202,body:{accepted:true}}]);h.context.events.onerror();
+ const response=await h.context.api('/api/chats/same-project/send',{text:h.draft.text});assert.equal(response.accepted,true);assert.equal(h.calls.length,1);assert.match(h.context.workspaceStatus(),/Reconnecting/);
 });
