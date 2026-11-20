@@ -623,7 +623,7 @@ async function action(kind){if(kind==='reload-workspace'){location.reload();retu
    openModal('web-link','<h2>Open on ChatGPT Sites</h2><p class="modal-intro">Pair this browser with Switchboard on this Mac. The site can read the workspace and send replies through your connected coding agents until you disconnect it.</p><button id="make-web-link" class="primary-button">Create pairing link</button>');
    $('make-web-link').onclick=async e=>{
      const button=e.currentTarget;button.disabled=true;
-     try{const {url}=await api('/api/web/link',{});if(modalType==='web-link'&&$('modal').open)openModal('web-link',`<h2>Pair this browser</h2><p class="modal-intro">This link works once and expires in five minutes.</p><a id="web-pair-link" class="primary-button" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open private Switchboard Site</a>`);}
+     try{const {url}=await api('/api/web/link',{});if(modalType==='web-link'&&$('modal').open)openModal('web-link',`<h2>Pair this browser</h2><p class="modal-intro">This link works once and expires in five minutes.</p><a id="web-pair-link" class="primary-button" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open Switchboard Site</a>`);}
      catch(error){toast(error.message);}finally{button.disabled=false;}
    };
    return;

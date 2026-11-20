@@ -25,7 +25,7 @@ export async function enterWebWorkspace(app){
   const ticket=fragment.get('pair');
   if(fragment.has('pair'))history.replaceState(null,'',location.pathname);
   let session=sessionStorage.getItem(sessionKey);
-  app.innerHTML='<main class="idea-workspace"><h1>Switchboard</h1><p>Connect to Switchboard on this Mac to use its Codex and Claude Code sessions.</p><button class="primary-button" id="connect-mac">Connect to this Mac</button><p role="status" id="connect-status"></p><p class="idea-intro"><a id="local-switchboard" href="http://127.0.0.1:4317/">Open Switchboard on this Mac</a> and choose Options → Open on website for a fresh link.</p></main>';
+  app.innerHTML='<main class="idea-workspace"><h1>Switchboard</h1><p>Connect to Switchboard on this Mac to use its Codex and Claude Code sessions.</p><button class="primary-button" id="connect-mac">Connect to this Mac</button><p role="status" id="connect-status"></p><p class="idea-intro"><a id="local-switchboard" href="http://127.0.0.1:4317/">Open Switchboard on this Mac</a> and choose Options → Open on website to pair this browser.</p></main>';
   const button=app.querySelector('#connect-mac'),status=app.querySelector('#connect-status');
   if(!isKey(ticket)&&!isKey(session)){
     button.hidden=true;
