@@ -250,6 +250,7 @@ async function submitPrompt(e) {
   const text=$('prompt').value.trim();
   if (!text) return;
   if (text.length>50000) {toast('Your reply is over 50,000 characters. Shorten it and try again.');return;}
+  const expectedPermission=$('permission').value;
   sending=true;
   try {
     let draft=drafts.read(c.id);
@@ -265,7 +266,7 @@ async function submitPrompt(e) {
     // reload generates the same receipt even if no response reached this tab.
     const requestId=await replyRequestId(draft,payload);
     render();
-    const result=await api(`/api/chats/${c.id}/send`,{...payload,requestId});
+    const result=await api(`/api/chats/${c.id}/send`,{...payload,requestId,expectedPermission});
     drafts.clearIfUnchanged(c.id,draft);
     viewedTurns.delete(c.id);
     if (autoAdvance && selected===c.id) choose(result.nextId);
