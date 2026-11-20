@@ -154,6 +154,14 @@ function foldersOverlap(first,second){
   };
   return within(first,second)||within(second,first);
 }
+function overlappingWatches(chat){
+  const folder=realpathSync(validCwd(chat.cwd));
+  return state.chats.filter(c=>{
+    if(!c.watch?.enabled)return false;
+    try{return foldersOverlap(realpathSync(validCwd(c.cwd)),folder);}
+    catch{return false;} // A removed folder cannot share writable files.
+  });
+}
 function run(chat,text,requestId,turnId,routeProvider){
   const previous=chat.messages.find(m=>m.requestId===requestId);
   if(previous){
@@ -163,6 +171,12 @@ function run(chat,text,requestId,turnId,routeProvider){
     return {nextId:nextAttention(state.chats,chat.id),duplicate:true};
   }
   if(chat.lastRequestId===requestId||chat.sendReceipts?.includes(requestId))return {nextId:nextAttention(state.chats,chat.id),duplicate:true};
+  if(!chat.demo && chat.permission==='edit'){
+    const watched=overlappingWatches(chat);
+    if(watched.some(c=>c.watch?.enabled && c.watch.phase==='working')){
+      throw Object.assign(new Error('An original watched chat is working in this folder or an overlapping folder. Wait for it to finish, then retry your reply with file edits.'),{status:409});
+    }
+  }
   if(['running','stopping'].includes(chat.status))throw Object.assign(new Error('This chat is already working.'),{status:409});
   if(jobs.size>=3)throw Object.assign(new Error('Three chats are already working. Wait for one to finish.'),{status:429});
   const provider=validProvider(routeProvider||chat.provider);
@@ -365,7 +379,8 @@ const server=http.createServer(async(req,res)=>{
           if(typeof data.text!=='string' || !data.text.trim())throw Error('Write a prompt first.');
           const text=data.text.trim();
           if(text.length>50000)throw Object.assign(Error('Your reply is over 50,000 characters. Shorten it and try again.'),{status:413});
-          send(res,202,run(chat,text,string(data.requestId||randomUUID(),100),data.turnId,data.provider));return;
+          if(!chat.demo && chat.permission==='edit')await monitor.refresh(overlappingWatches(chat));
+          send(res,202,run(requiredChat(match[1]),text,string(data.requestId||randomUUID(),100),data.turnId,data.provider));return;
         }
         if(action==='stop'){const job=jobs.get(chat.id);if(job?.demo){clearTimeout(job.timer);jobs.delete(chat.id);complete(chat,'','You stopped this demo turn.',[],'interrupted');}else if(job){job.stopped=true;chat.status='stopping';stopJob(chat.id,job);update();}send(res,200,{ok:true});return;}
         if(['running','stopping'].includes(chat.status))throw new Error('Stop this turn before changing the project.');
