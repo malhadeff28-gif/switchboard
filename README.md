@@ -4,7 +4,7 @@ Switchboard is a local interface for Codex and Claude Code. Choose chats to foll
 
 ## Download the pilot
 
-[Open the pilot downloads](https://github.com/malhadeff28-gif/switchboard/releases/tag/v0.3.0-pilot.1). Choose the ZIP for your operating system and CPU. Extract the entire folder, then open its launcher. The ZIP includes Node. Keep the launch window open while using the browser workspace.
+[Open the pilot downloads](https://github.com/malhadeff28-gif/switchboard/releases/tag/v0.3.1-pilot.3). Choose the ZIP for your operating system and CPU. Extract the entire folder, then open its launcher. The ZIP includes Node. Keep the launch window open while using the browser workspace.
 
 | Computer | Download name | Launcher |
 |---|---|---|
