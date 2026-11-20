@@ -4,23 +4,24 @@ Switchboard is a local interface for Codex and Claude Code. Choose chats to foll
 
 ## Download the pilot
 
-[Open the pilot downloads](https://github.com/malhadeff28-gif/switchboard/releases/tag/v0.3.1-pilot.3). Choose the ZIP for your operating system and CPU. Extract the entire folder, then open its launcher. The ZIP includes Node. Keep the launch window open while using the browser workspace.
+[Open the pilot downloads](https://github.com/malhadeff28-gif/switchboard/releases/tag/v0.3.1-pilot.3). Choose the ZIP for your computer, extract it, and open the launcher listed below. The ZIP includes Node.
 
 | Computer | Download name | Launcher |
 |---|---|---|
-| Apple silicon Mac | Switchboard-darwin-arm64.zip | Start Switchboard.command |
+| Apple silicon Mac, macOS 13.5 or later | [Notarized Switchboard.app ZIP](https://github.com/malhadeff28-gif/switchboard/releases/download/v0.3.1-pilot.3/Switchboard-0.3.1-pilot.3-notarized-arm64.zip) | Switchboard.app |
+| Apple silicon Mac (portable) | Switchboard-darwin-arm64.zip | Start Switchboard.command |
 | Intel Mac | Switchboard-darwin-x64.zip | Start Switchboard.command |
 | Windows, Intel or AMD | Switchboard-win-x64.zip | Start Switchboard.cmd |
 | Windows on ARM | Switchboard-win-arm64.zip | Start Switchboard.cmd |
 | Linux, Intel or AMD | Switchboard-linux-x64.zip | Start Switchboard.sh |
 | Linux on ARM64 | Switchboard-linux-arm64.zip | Start Switchboard.sh |
 
-On Mac, if Finder does not open the unsigned launcher, open Terminal, type `sh` followed by a space, drag **Start Switchboard.command** from the extracted folder into Terminal, and press Return. This launches the bundled runtime. On Linux you can run `sh "Start Switchboard.sh"` from the extracted folder. Switchboard listens at [127.0.0.1:4317](http://127.0.0.1:4317). The pilot ZIPs are unsigned. Managed computers may block scripts or downloads. The release notes identify the platforms and provider flows tested.
+Keep the launch window open when using a portable package. You can start the Mac portable package from Terminal by typing `sh` followed by a space, dragging **Start Switchboard.command** from the extracted folder into Terminal, and pressing Return. On Linux you can run `sh "Start Switchboard.sh"` from the extracted folder. Switchboard listens at [127.0.0.1:4317](http://127.0.0.1:4317). The portable ZIPs are unsigned. The release notes identify the platforms and provider flows tested.
 
 ## First run
 
-1. Open **Connections**. On Mac, choose **Open Codex** or **Open Claude** if the desktop app is installed. Sign in with the provider, then return to Switchboard and click **OK**. Switchboard checks the local coding CLI. If it still needs its own sign-in, use the coding CLI sign-in button. If the CLI is missing, install [Codex CLI](https://developers.openai.com/codex/cli) or [Claude Code](https://code.claude.com/docs/en/setup).
-2. Select **Choose chats**. Pick a conversation from your local Codex or Claude Code history. Repeat to add another. Switchboard reads the selected project’s transcript and shows its latest result while it prepares the handoff.
+1. Open **Connections**. If your provider is already connected, choose your chats. On Mac, if you see **Open ChatGPT**, **Open Codex**, or **Open Claude**, sign in there, then return to Switchboard and click **OK**. Switchboard checks whether the local coding CLI can use that sign-in. If Switchboard offers a separate sign-in button, follow it and return to click **OK**. If the CLI is missing, install [Codex CLI](https://developers.openai.com/codex/cli) or [Claude Code](https://code.claude.com/docs/en/setup).
+2. Select **Choose chats**. Pick a conversation from your local Codex or Claude Code history, or use **Follow several chats** to add them together. Switchboard shows each chat’s latest result while it prepares the handoff.
 3. Open a result. Read **What happened**, expand a numbered source, then compare the options and their tradeoffs. Click an option to put it in your draft or type your own answer. Select the provider and press **Send**. **Send & move on** advances to the next ready project. The result menu lets you revisit earlier turns.
 4. **Pause** on a watched project stops automatic handoff analysis. You can also try simulated projects without connecting an account.
 
