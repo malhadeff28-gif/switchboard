@@ -68,10 +68,12 @@ function workspaceMenu(c){
  <div class="menu-actions"><button data-action="connections">Connections</button><button data-action="usage">Usage</button><button data-action="ideas">Ideas</button><a href="/desktop">Inside Codex</a><button data-action="demo">Try demo</button>${state.chats.some(x=>x.demo)?'<button data-action="clear-demo">Remove demo projects</button>':''}</div>
  <label class="auto-toggle"><input id="auto" type="checkbox" ${autoAdvance?'checked':''}> Move to the next ready project after sending</label>`);
 }
-function render(){
+function render({showReport=false,followReply=false}={}){
  const focus=document.activeElement?.id, start=document.activeElement?.selectionStart, end=document.activeElement?.selectionEnd;
  const previousThread=$('thread'), previousChat=$('workspace')?.dataset.chat;
- const previousResult=previousThread?.dataset.result, scroll=previousThread?.scrollTop, promptScroll=$('prompt')?.scrollTop;
+ const scroll=previousThread?.scrollTop, promptScroll=$('prompt')?.scrollTop;
+ const nearEnd=previousThread&&previousThread.scrollHeight-previousThread.clientHeight-scroll<36;
+ const previousResult=previousThread?.dataset.result;
  const disclosures=[...(previousThread?.querySelectorAll('details[id]')??[])].map(item=>[item.id,item.open]);
  const chat=state.chats.find(c=>c.id===selected);
  $('app').innerHTML=`<nav class="workspace-tools" aria-label="Workspace"><button id="projects-button" class="project-switch" data-action="projects" aria-haspopup="dialog"><span>${esc(chat?.title||'Projects')}</span><span aria-hidden="true">⌄</span></button><button id="next-project" data-action="next" title="Next ready chat (Alt+N)" aria-label="Next ready chat" ${next(selected)?'':'disabled'}>Next <span aria-hidden="true">→</span></button><button id="options-button" class="icon-button" data-action="menu" aria-label="Options" aria-haspopup="dialog">···</button></nav>
@@ -87,9 +89,21 @@ function render(){
  }
  if(previousChat===selected&&$('prompt')&&promptScroll!==undefined)$('prompt').scrollTop=promptScroll;
  const thread=$('thread');
- if(thread && previousChat===selected && previousResult===thread.dataset.result){
-   for(const [id,open] of disclosures){const item=$(id);if(item)item.open=open;}
-   if(scroll!==undefined)thread.scrollTop=scroll;
+ if(thread){
+   const sameChat=previousChat===selected;
+   if(sameChat)for(const [id,open] of disclosures){const item=$(id);if(item)item.open=open;}
+   if(followReply||(sameChat&&nearEnd&&focus!=='prompt'&&!showReport&&previousResult===thread.dataset.result&&chat.status==='running')){
+     thread.scrollTop=thread.scrollHeight;
+   }else if(!sameChat||showReport||(!previousResult&&thread.dataset.result)||(nearEnd&&focus!=='prompt'&&previousResult!==thread.dataset.result)){
+     const report=$('current-report');
+     if(report){
+       const prior=report.previousElementSibling;
+       const promptPeek=prior?.classList.contains('user')?Math.min(prior.offsetHeight+12,96):0;
+       thread.scrollTop=report.getBoundingClientRect().top-thread.getBoundingClientRect().top-20-promptPeek;
+     }
+   }else if(scroll!==undefined){
+     thread.scrollTop=scroll;
+   }
  }
 }
 function firstRun(){
@@ -133,7 +147,7 @@ function updateReplyConnection(c){
 }
 function showWatchedResult(c){
  const id=watchedResultToReview(c);if(!id)return;
- viewedTurns.set(c.id,id);render();
+ viewedTurns.set(c.id,id);render({showReport:true});
 }
 function replyConnectionNotice(c){
  if(c.demo||state.workspaceMismatch)return '';
@@ -182,6 +196,27 @@ function turnView(c){
  ${status||retry?`<div class="analysis-status" role="status">${esc(status)} ${retry?'<button class="text-button" data-action="analyze">Retry analysis</button>':''}</div>`:''}
  ${hasDecision?`<h3 ${actualDecision?`id="${esc(decisionId)}" tabindex="-1" data-decision-result="${esc(t.id)}" data-decision-project="${esc(c.id)}"`:''}>${card.decision?'Decision':'No decision needed'}</h3>${card.decision?`${decisionInSummary?'':`<p>${esc(card.decision)}</p>`}<div class="decision-options">${options}</div>`:''}`:''}
  ${evidence.length?`<h3>Evidence</h3><div class="source-list">${evidence.map((e,i)=>`<details id="${esc(evidenceId(e))}"><summary>[${i+1}] ${esc(e.label)}</summary><pre>${esc(e.text)}</pre></details>`).join('')}</div>`:''}</section>`;
+}
+function conversation(c,report,status){
+ const messages=c.messages;
+ if(!report)return messages.map(m=>chatMessage(c,m)).join('')+status+turnView(c);
+ const sameProvider=m=>m.role==='assistant'&&m.provider===report.provider;
+ const isWatched=report.origin==='watched';
+ let index=messages.findIndex(m=>sameProvider(m)&&(m.turnId===report.id||(isWatched&&m.id==='source-'+report.id)));
+ // Older workspaces did not store a managed message's turn ID.
+ if(index<0&&!isWatched&&report.answer){
+   const matches=messages.map((m,i)=>({m,i})).filter(({m})=>sameProvider(m)&&!m.imported&&!m.turnId&&m.text===report.answer&&Math.abs(m.at-report.at)<1500);
+   if(matches.length===1)index=matches[0].i;
+ }
+ const original=index>=0?messages[index].text:report.answer;
+ const fullResponse=original&&original.trim()!==String(report.card.summary??'').trim()? `<details id="response-${esc(report.id)}" class="full-response"><summary>Full response</summary><div class="message-body">${markdown(original,c)}</div></details>`:'';
+ const card=`<article id="current-report" class="message report-message">${status}${turnView(c)}${fullResponse}</article>`;
+ const insertAt=index>=0?index:messages.findIndex(m=>m.at>report.at);
+ if(insertAt<0)return messages.map(m=>chatMessage(c,m)).join('')+card;
+ return messages.slice(0,insertAt).map(m=>chatMessage(c,m)).join('')+card+messages.slice(insertAt+(index>=0?1:0)).map(m=>chatMessage(c,m)).join('');
+}
+function chatMessage(c,m){
+ return `<article class="message ${m.role==='user'?'user':'assistant'}"><div class="message-label">${m.role==='user'?'You':name(m.provider)}${m.imported?' <span>Original chat</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`;
 }
 function jumpToDecision(button){
  const c=state.chats.find(chat=>chat.id===selected),turn=c&&visibleTurn(c);
@@ -240,18 +275,16 @@ function chatView(c){
  const busy=['running','stopping'].includes(c.status),changing=switchingProvider.has(c.id),report=visibleTurn(c,draft);
  const connection=replyConnectionNotice(c);
  const watch=c.watch;
- return `<section id="thread" class="thread" aria-label="Project report" tabindex="0" data-result="${esc(report?.id||'')}"><div class="report-content">
- ${state.storageError?`<div class="error-card" role="alert">${esc(state.storageError)}</div>`:''}
+ const status=`${state.storageError?`<div class="error-card" role="alert">${esc(state.storageError)}</div>`:''}
  ${watch&&(watch.error||!watch.enabled||watch.phase==='working')?`<div class="watch-status" role="status">${watch.error?esc(watch.error):watch.enabled?`${name(watch.provider)} is working in the original chat.`:'Watching paused.'}</div>`:''}
  ${turnStatus(c)}
- ${c.permissionNotice?`<div class="notice">${esc(c.permissionNotice)}</div>`:''}
- <div id="watched-result-notice" ${watchedResultToReview(c)?'':'hidden'}>${watchedResultNotice(c)}</div>
- ${turnView(c)}
- ${c.messages.length?`<details id="project-conversation" class="conversation"><summary>Conversation</summary>${c.messages.map(m=>`<article class="message ${m.role}"><div class="message-label">${m.role==='user'?'You':name(m.provider)}${m.imported?' <span>Imported</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`).join('')}</details>`:''}
+ ${c.permissionNotice?`<div class="notice">${esc(c.permissionNotice)}</div>`:''}`;
+ return `<section id="thread" class="thread" aria-label="Conversation" tabindex="0" data-result="${esc(report?.id||'')}"><div class="conversation">
+ ${conversation(c,report,status)}
  ${busy&&c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0],c)}</div>`:''}</div></section>
  <div class="composer-wrap">${editOverlapNotice(c)}
  <form id="composer" aria-label="Reply" data-project="${esc(c.id)}" data-draft="${esc(JSON.stringify(draft))}" data-result="${esc(report?.id||'')}" data-provider="${esc(provider)}">
- <div id="reply-connection-notice" ${connection?'':'hidden'}>${connection}</div><div id="reply-target" class="composer-note">${replyTarget(c,draft)}</div>
+ <div id="watched-result-notice" ${watchedResultToReview(c)?'':'hidden'}>${watchedResultNotice(c)}</div><div id="reply-connection-notice" ${connection?'':'hidden'}>${connection}</div><div id="reply-target" class="composer-note">${replyTarget(c,draft)}</div>
  <div class="reply-box"><label class="sr-only" for="prompt">Reply to ${recipient}</label><textarea id="prompt" placeholder="Message ${c.demo?'the demo':recipient}…" ${busy||sending?'disabled':''}>${esc(draft.text)}</textarea>
  <div class="reply-tools">${c.demo?'<span class="demo-tag">Simulated reply</span>':`<div class="provider-picker" role="group" aria-label="Reply provider">${['codex','claude'].map(p=>`<button id="reply-${p}" type="button" data-provider="${p}" aria-pressed="${provider===p}" ${busy||changing||sending?'disabled':''}>${name(p)}</button>`).join('')}</div>`}
  <select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select>
@@ -296,6 +329,7 @@ async function submitPrompt(e) {
     drafts.clearIfUnchanged(c.id,draft);
     viewedTurns.delete(c.id);
     if (autoAdvance && selected===c.id && result.nextId) choose(result.nextId);
+    else if(selected===c.id)render({followReply:true});
     if(c.demo)toast(result.duplicate?'This simulated reply was already sent.':'Simulated reply sent.');
     else toast(result.duplicate?`This reply was already sent to ${name(provider)}.`:`Sent to ${name(provider)}.`);
   } catch(error) {
@@ -484,7 +518,7 @@ async function action(kind){if(kind==='reload-workspace'){location.reload();retu
  if(kind==='projects')return projectPicker();
  if(kind==='menu')return workspaceMenu(c);
  if(modalType==='menu'&&['pin','park','pause-watch','resume-watch','ideas','demo','clear-demo'].includes(kind))$('modal').close();
- if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render();return;}
+ if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render({showReport:true});return;}
  if(c&&kind==='show-watched-result'){showWatchedResult(c);return;}
  if(c&&kind==='analyze'){await api(`/api/chats/${c.id}/analyze`,{turnId:visibleTurn(c)?.id});return;}
  if(c&&['pause-watch','resume-watch'].includes(kind)){await api(`/api/chats/${c.id}/${kind}`,{});return;}
@@ -549,7 +583,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.dataset.explore){const idea=state.ideas.find(i=>i.id===b.dataset.explore);if(idea)newProject(idea);}
  }catch(error){b.disabled=false;toast(error.message);}});
 document.addEventListener('submit',async e=>{const form=e.target.closest('form[data-auth-code]');if(!form)return;e.preventDefault();const input=form.elements.code,button=form.querySelector('button');button.disabled=true;try{await api('/api/connections/code',{provider:form.dataset.authCode,code:input.value});input.value='';toast('Code submitted. Waiting for the provider…');}catch(error){toast(error.message);button.disabled=false;}});
-document.addEventListener('change',async e=>{if(e.target.id==='auto'){autoAdvance=e.target.checked;localStorage.setItem('switchboard-auto',String(autoAdvance));return;}if(e.target.id==='which-turn'){viewedTurns.set(selected,e.target.value);render();return;}if(e.target.id==='permission')try{await api(`/api/chats/${selected}/update`,{permission:e.target.value});toast(e.target.value==='edit'?'File edits enabled for this project.':'Read-only access enabled.');}catch(error){toast(error.message);}});
+document.addEventListener('change',async e=>{if(e.target.id==='auto'){autoAdvance=e.target.checked;localStorage.setItem('switchboard-auto',String(autoAdvance));return;}if(e.target.id==='which-turn'){viewedTurns.set(selected,e.target.value);render({showReport:true});return;}if(e.target.id==='permission')try{await api(`/api/chats/${selected}/update`,{permission:e.target.value});toast(e.target.value==='edit'?'File edits enabled for this project.':'Read-only access enabled.');}catch(error){toast(error.message);}});
 document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&$('composer')&&!$('modal').open){e.preventDefault();$('composer').requestSubmit();}if(e.altKey&&e.key.toLowerCase()==='n'&&!$('modal').open){const id=next(selected);if(id){e.preventDefault();choose(id);}}});
 $('modal').addEventListener('close',()=>modalType=null);
 $('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});

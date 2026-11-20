@@ -354,7 +354,7 @@ function complete(chat,answer,error,facts=[],phase=error?'failed':'finished',pri
   }
   (chat.turns||=[]).push(turn);chat.displayTurn=turn.id;
   if(!error && !chat.demo)recordResponse(chat.provider);
-  if(turn.answer)chat.messages.push({id:randomUUID(),role:'assistant',provider:chat.provider,text:turn.answer,at:Date.now()});
+  if(turn.answer)chat.messages.push({id:randomUUID(),turnId:turn.id,role:'assistant',provider:chat.provider,text:turn.answer,at:Date.now()});
   if(answer && !error){
     chat.summary=turn.analysis==='ready'?handoff.summary:turn.answer.slice(0,900);
     chat.nextAction=turn.analysis==='ready'?handoff.nextAction:'Read the response and choose your next step.';

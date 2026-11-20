@@ -12,6 +12,7 @@
   --chrome: #f1f4f9;
   --paper: #fff;
   --hover: #eaf0f8;
+  --conversation-width: 780px;
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
@@ -65,8 +66,8 @@ textarea { resize: vertical; }
 #workspace { min-width: 0; min-height: 0; overflow: auto; }
 #workspace.active-project {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(304px, 32vw, 438px);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
 }
 .thread {
@@ -74,13 +75,13 @@ textarea { resize: vertical; }
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
   outline-offset: -3px;
 }
-.report-content {
-  max-width: 820px;
+.conversation {
+  max-width: var(--conversation-width);
   margin-inline: auto;
-  padding: clamp(20px, 3vw, 44px) clamp(16px, 4vw, 60px) 48px;
+  padding: 20px 12px 12px;
 }
 .handoff-card { overflow-wrap: anywhere; }
 .report-meta, .turn-picker, .watch-status {
@@ -124,9 +125,11 @@ h3 { font-size: 16px; font-weight: 640; margin: 23px 0 8px; }
 .decision-option:hover:enabled { border-color: #a7c4ed; background: #f5f8ff; }
 .decision-option span { color: var(--muted); }
 .source-list details { border-top: 1px solid var(--line); }
-.source-list summary, .conversation summary { cursor: pointer; font-size: 14px; padding: 10px 0; }
-.conversation { margin-top: 20px; border-top: 1px solid var(--line); }
+.source-list summary, .full-response summary { cursor: pointer; font-size: 14px; padding: 10px 0; }
+.full-response { border-top: 1px solid var(--line); color: var(--muted); }
+.full-response .message-body { color: var(--ink); }
 .message { padding: 10px 0; margin: 5px 0 16px; }
+.report-message { padding-block: 12px; }
 .message.user {
   width: fit-content;
   max-width: 88%;
@@ -163,11 +166,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; }
   align-self: stretch;
   overflow-y: auto;
   overscroll-behavior: contain;
-  border-left: 1px solid var(--line);
-  padding: clamp(20px, 3vw, 44px) clamp(12px, 1.8vw, 23px);
-  background: var(--chrome);
+  border-top: 1px solid var(--line);
+  background: #f8faff;
+  padding: 9px clamp(12px, 2vw, 24px) calc(12px + env(safe-area-inset-bottom));
+  max-height: 48dvh;
 }
-#composer { display: grid; gap: 8px; }
+#composer, .composer-wrap > .notice { max-width: var(--conversation-width); margin-inline: auto; }
+#composer { display: grid; gap: 6px; }
 .reply-box {
   min-width: 0;
   display: grid;
@@ -189,9 +194,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; }
 #prompt {
   width: 100%;
   min-width: 0;
-  min-height: 76px;
-  height: 110px;
-  max-height: 40dvh;
+  min-height: 44px;
+  height: 54px;
+  max-height: 24dvh;
   border: 0;
   font-size: 15px;
   line-height: 1.5;
@@ -204,6 +209,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; }
 .composer-note { font-size: 12px; color: var(--muted); line-height: 1.45; }
 .composer-note:empty { display: none; }
 #reply-connection-notice .notice { margin-bottom: 0; }
+#watched-result-notice .notice { margin-bottom: 0; }
 .demo-tag { font-size: 13px; color: var(--muted); }
 .primary-button, .send-button { background: var(--accent); color: white; border-radius: 8px; font-size: 14px; font-weight: 600; padding: 8px 14px; }
 .primary-button:hover:enabled, .send-button:hover:enabled { background: var(--accent-dark); }
@@ -274,10 +280,9 @@ dialog textarea { min-height: 76px; }
 #toast.visible { opacity: 1; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 750px) {
-  #workspace.active-project { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
-  .report-content { padding: 14px 14px 22px; }
-  .composer-wrap { border-left: 0; border-top: 1px solid var(--line); padding: 7px 12px; max-height: 46dvh; }
-  #composer { margin-inline: auto; max-width: 610px; }
+  .thread { scrollbar-gutter: auto; }
+  .conversation { padding: 10px 14px; }
+  .composer-wrap { padding: 7px 12px calc(8px + env(safe-area-inset-bottom)); }
   .reply-box { padding: 5px 7px; }
   #prompt { min-height: 40px; height: 44px; max-height: 24dvh; padding: 6px 8px; }
   @supports (field-sizing: content) { #prompt { height: auto; } }

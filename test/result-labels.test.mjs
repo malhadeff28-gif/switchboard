@@ -36,3 +36,25 @@ test('stored question previews are concise, escaped, and optional',()=>{
  assert.ok(h.resultLabel(malicious).endsWith('…'));assert.ok(!h.resultLabel(other).endsWith(' · '));
  assert.equal(h.resultLabel({...other,card:{decision:{bad:true}}}),h.resultLabel(other));
 });
+test('the report replaces its own conversation message and preserves both surrounding messages and full output',()=>{
+ const report={...chat.turns[2],answer:'The full response',card:{...card(null),summary:'A shorter report'}};
+ const messages=[
+  {role:'user',text:'Question before the report',at:report.at-1},
+  {role:'assistant',provider:'codex',text:report.answer,at:report.at+1},
+  {role:'assistant',provider:'codex',text:report.answer,at:report.at+2000},
+  {role:'user',text:'Question after the report',at:report.at+3000},
+ ];
+ const h=harness({text:''});
+ for(const match of [{},{turnId:report.id}]){
+   const c={...chat,turns:[report],messages:messages.map((m,i)=>i===1?{...m,...match}:m)};
+   const html=h.conversation(c,report,'');
+   assert.ok(html.indexOf('Question before the report')<html.indexOf('id="current-report"'));
+   assert.ok(html.indexOf('Full response')<html.indexOf('Question after the report'));
+   assert.equal(html.match(/The full response/g)?.length,2);
+   assert.equal(html.match(/id="current-report"/g)?.length,1);
+ }
+ const watched={...chat.turns[0],answer:'Old original output',card:{...card(null),summary:'Old original output'}};
+ const html=h.conversation({...chat,turns:[watched],messages:[{role:'assistant',provider:'codex',text:watched.answer,id:'source-'+watched.id,imported:true,at:watched.at}]},watched,'');
+ assert.equal(html.match(/Old original output/g)?.length,1);
+ assert.doesNotMatch(html,/Full response/);
+});
