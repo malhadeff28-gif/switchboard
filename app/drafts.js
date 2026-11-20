@@ -1,3 +1,5 @@
+import {readableText} from './readable.js';
+
 function readObject(storage,key) {
   try {
     const value=JSON.parse(storage.getItem(key));
@@ -49,7 +51,7 @@ export async function replyRequestId(draft,payload) {
 }
 
 export function choiceText(index,option) {
-  return `Use option ${index+1}: ${option.label}. ${option.tradeoff}`.trim();
+  return `Use option ${index+1}: ${readableText(option.label)}. ${readableText(option.tradeoff)}`.trim();
 }
 
 // An edit permanently detaches the earlier choice, even if later undone.

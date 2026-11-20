@@ -1,4 +1,5 @@
 import {renderMarkdown} from './local-files.js';
+import {readableText} from './readable.js';
 import {draftStore,replyRequestId,choiceText,editDraft,sameDraft} from './drafts.js';
 import {clearWebSession,companionUrl,enterWebWorkspace,webRequest,webUpdates} from './web-session.js';
 let state={chats:[],ideas:[],connections:{}}, token='', selected=null, modalType=null, found=[], nextOffset=null, sending=false, renderTimer;
@@ -16,7 +17,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const name=p=>p==='claude'?'Claude':'Codex';
 function ready(){return state.chats.filter(c=>c.status==='ready').sort((a,b)=>(b.priority||0)-(a.priority||0)||a.readyAt-b.readyAt);}
 function next(exclude){return ready().find(c=>c.id!==exclude)?.id||null;}
-function toast(text){$('toast').textContent=text;$('toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.remove('visible'),4200);}
+function toast(text){$('toast').textContent=readableText(text);$('toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.remove('visible'),4200);}
 const workspaceMismatchMessage='A different Switchboard workspace is open. Reload this tab before sending.';
 function workspaceStatus(){
  if(state.workspaceMismatch)return '<div class="notice" role="alert"><strong>A different workspace is open.</strong> Saved drafts remain with the previous workspace. <button type="button" class="text-button" data-action="reload-workspace">Reload workspace ↗</button></div>';
@@ -59,17 +60,45 @@ function markdown(text,project){return renderMarkdown(text,{project,canReveal:st
 function projectStatus(c){
  return c.status==='watching'?'Original chat working':c.status==='running'?'Working':c.status==='stopping'?'Stopping':c.status==='parked'?'Caught up':isUserStopped(c)?'Reply stopped':c.error?'Needs attention':'Ready';
 }
-function row(c){return `<button class="project-row" data-select="${esc(c.id)}" ${c.id===selected?'aria-current="true"':''}><span class="project-name">${esc(c.title)}</span><span class="project-sub">${c.demo?'Demo · ':''}${name(c.provider)} · ${projectStatus(c)}${c.priority?' · Priority':''}</span></button>`;}
+function row(c){return `<button class="project-row" data-select="${esc(c.id)}" ${c.id===selected?'aria-current="true"':''}><span class="project-name">${esc(readableText(c.title).trim()||'Untitled chat')}</span><span class="project-sub">${c.demo?'Demo · ':''}${name(c.provider)} · ${projectStatus(c)}${c.priority?' · Priority':''}${drafts.read(c.id).text.trim()?' · Draft':''}</span></button>`;}
 function projectPicker(){
- const projects=[...ready(),...state.chats.filter(c=>c.status!=='ready')];
- const rows=query=>projects.filter(c=>c.title.toLowerCase().includes(query.toLowerCase().trim())).map(row).join('')||'<p class="modal-intro">No matching projects.</p>';
- openModal('projects',`<h2>Projects</h2><input id="project-search" type="search" aria-label="Search projects" placeholder="Search projects"><div id="project-list" class="project-list">${rows('')}</div><div class="menu-actions"><button data-action="discover">Find chats</button><button data-action="new">New project</button></div>`);
- $('project-search').oninput=e=>{$('project-list').innerHTML=rows(e.target.value);};
+ const rows=query=>{
+   const words=query.toLowerCase().trim().split(/\s+/);
+   const groups=[
+     ['Ready',ready().filter(c=>!c.error)],
+     ['Working',state.chats.filter(c=>['running','watching','stopping'].includes(c.status))],
+     ['Needs attention',ready().filter(c=>c.error)],
+     ['Caught up',state.chats.filter(c=>c.status==='parked')],
+   ];
+   return groups.map(([label,chats])=>{
+     const matches=chats.filter(c=>words.every(word=>(readableText(c.title)+' '+name(c.provider)+' '+projectStatus(c)).toLowerCase().includes(word)));
+     return matches.length?`<section class="chat-group" aria-label="${label}"><h3>${label}</h3>${matches.map(row).join('')}</section>`:'';
+   }).join('')||'<p class="modal-intro">No matching chats.</p>';
+ };
+ openModal('projects',`<h2>Switch chats</h2><input id="project-search" type="search" aria-label="Search chats" placeholder="Search by chat or provider"><div id="project-list" class="project-list">${rows('')}</div><div class="menu-actions"><button data-action="discover">Follow more chats</button><button data-action="new">New project</button></div>`);
+ const search=$('project-search'),list=$('project-list');
+ search.oninput=()=>{list.innerHTML=rows(search.value);};
+ search.onkeydown=e=>{
+   if(e.isComposing||!['ArrowDown','ArrowUp','Enter'].includes(e.key))return;
+   const choices=list.querySelectorAll('[data-select]');
+   if(!choices.length)return;
+   e.preventDefault();
+   if(e.key==='Enter')choices[0].click();
+   else (e.key==='ArrowUp'?choices[choices.length-1]:choices[0]).focus();
+ };
+ list.onkeydown=e=>{
+   if(!['ArrowDown','ArrowUp'].includes(e.key))return;
+   const choices=[...list.querySelectorAll('[data-select]')];
+   const index=choices.indexOf(e.target);
+   if(index<0)return;
+   e.preventDefault();
+   (choices[index+(e.key==='ArrowDown'?1:-1)]||search).focus();
+ };
 }
 function workspaceMenu(c){
  const busy=c&&['running','stopping'].includes(c.status);
  openModal('menu',`<h2>Options</h2>${c?`<div class="menu-actions"><button data-action="memory">Project memory</button><button data-action="pin" ${c.priority?'aria-pressed="true"':'aria-pressed="false"'}>${c.priority?'Remove priority':'Prioritize project'}</button><button data-action="park" ${busy?'disabled':''}>Mark caught up</button>${c.watch?`<button data-action="${c.watch.enabled?'pause-watch':'resume-watch'}">${c.watch.enabled?'Pause watching':'Resume watching'}</button>`:''}</div>`:''}
- <div class="menu-actions"><button data-action="connections">Connections</button><button data-action="usage">Usage</button><button data-action="ideas">Ideas</button><a href="${webSession?companionUrl:''}/desktop">Inside Codex</a><button data-action="demo">Try demo</button>${state.chats.some(x=>x.demo)?'<button data-action="clear-demo">Remove demo projects</button>':''}${state.webEnabled&&!webSession?'<button data-action="web-link">Open on website</button>':''}${state.webEnabled?'<button data-action="web-disconnect">Disconnect website</button>':''}</div>
+ <div class="menu-actions"><button data-action="connections">Connections</button><button data-action="usage">Usage</button><a href="${webSession?companionUrl:''}/desktop">Inside Codex</a><button data-action="demo">Try demo</button>${state.chats.some(x=>x.demo)?'<button data-action="clear-demo">Remove demo projects</button>':''}${state.webEnabled&&!webSession?'<button data-action="web-link">Open on website</button>':''}${state.webEnabled?'<button data-action="web-disconnect">Disconnect website</button>':''}</div>
  <label class="auto-toggle"><input id="auto" type="checkbox" ${autoAdvance?'checked':''}> Move to the next ready project after sending</label>`);
 }
 function render({showReport=false,followReply=false}={}){
@@ -80,7 +109,8 @@ function render({showReport=false,followReply=false}={}){
  const previousResult=previousThread?.dataset.result;
  const disclosures=[...(previousThread?.querySelectorAll('details[id]')??[])].map(item=>[item.id,item.open]);
  const chat=state.chats.find(c=>c.id===selected);
- $('app').innerHTML=`<nav class="workspace-tools" aria-label="Workspace"><button id="projects-button" class="project-switch" data-action="projects" aria-haspopup="dialog"><span>${esc(chat?.title||'Projects')}</span><span aria-hidden="true">⌄</span></button><button id="next-project" data-action="next" title="Next ready chat (Alt+N)" aria-label="Next ready chat" ${next(selected)?'':'disabled'}>Next <span aria-hidden="true">→</span></button><button id="options-button" class="icon-button" data-action="menu" aria-label="Options" aria-haspopup="dialog">···</button></nav>
+ const readyCount=ready().filter(c=>c.id!==selected).length;
+ $('app').innerHTML=`<nav class="workspace-tools" aria-label="Workspace"><button id="projects-button" class="project-switch" data-action="projects" aria-label="Switch chats" title="Switch chats (⌘K or Ctrl+K)" aria-haspopup="dialog"><span>${esc(readableText(chat?.title).trim()||'Chats')}</span><span aria-hidden="true">⌄</span><kbd aria-hidden="true">⌘K</kbd></button><button id="next-project" data-action="next" title="Next ready chat (Alt+N)" aria-label="Next ready chat" ${readyCount?'':'disabled'}>Next ready${readyCount?` <span class="ready-count" aria-label="${readyCount} chats ready">${readyCount}</span>`:''}</button><button id="ideas-button" data-action="ideas" aria-haspopup="dialog">Ideas</button><button id="options-button" class="icon-button" data-action="menu" aria-label="Options" aria-haspopup="dialog">···</button></nav>
  ${workspaceStatus()}<main id="workspace" data-chat="${esc(chat?.id||'')}" class="${chat?'active-project':''}">${chat?chatView(chat):!state.chats.length&&location.hash!=='#ideas'?firstRun():ideaView()}</main>`;
  $('prompt')?.addEventListener('input',e=>{
    handlePromptInput(e);
@@ -168,7 +198,7 @@ function replyAnchor(c,draft=drafts.read(c.id)) {
 }
 function resultLabel(turn) {
  const origin=turn.origin==='watched'?'Original chat':turn.origin==='managed'?'Switchboard reply':'Project result';
- const question=typeof turn.card?.decision==='string'?turn.card.decision.replace(/\s+/g,' ').trim():'';
+ const question=typeof turn.card?.decision==='string'?readableText(turn.card.decision).replace(/\s+/g,' ').trim():'';
  const preview=question.length>90?question.slice(0,89)+'…':question;
  return `${origin} · ${name(turn.provider)} · ${new Date(turn.at).toLocaleString()} · ${turn.phase}${preview?' · '+preview:''}`;
 }
@@ -181,9 +211,9 @@ function replyTarget(c,draft=drafts.read(c.id)) {
   return `Draft is for a different result. <button type="button" class="text-button" data-action="show-draft-result" title="${esc(resultLabel(turn))}">Show draft’s result</button>`;
 }
 function decisionContext(c,t){
- const request=t.request?.trim(),goal=c.goal?.trim(),requirements=c.requirements?.trim();
- const saved=c.confirmedDecisions||[];
- const earlier=(t.priorInstructions||[]).filter(text=>text!==request&&text!==requirements);
+ const request=readableText(t.request).trim(),goal=readableText(c.goal).trim(),requirements=readableText(c.requirements).trim();
+ const saved=(c.confirmedDecisions||[]).map(readableText).filter(text=>text.trim());
+ const earlier=(t.priorInstructions||[]).map(readableText).filter(text=>text.trim()&&text!==request&&text!==requirements);
  if(!request&&!goal&&!requirements&&!saved.length&&!earlier.length)return '';
  return `<details id="context-${esc(t.id)}" class="decision-context" ${t.card.decision?'open':''}>
   <summary>Decision context</summary>
@@ -197,26 +227,45 @@ function decisionContext(c,t){
 function turnView(c){
  const t=visibleTurn(c);
  if(!t)return `<section class="handoff-card"><h2>Project context</h2><div class="handoff-summary">${markdown(c.summary,c)}</div></section>`;
- const card=t.card, evidence=card.evidence||[];
+ const card=t.card, evidence=(card.evidence||[]).map(e=>({...e,text:readableText(e.text)}))
+   .filter(e=>e.label!=='Unverified handoff data'&&e.text.trim());
+ const summary=readableText(card.summary).trim()||readableText(t.answer).trim()||'No readable update was recorded.';
+ const previewLimit=1400;
+ const paragraphEnd=summary.lastIndexOf('\n\n',previewLimit);
+ const sentenceEnd=summary.lastIndexOf('. ',previewLimit);
+ let summaryEnd=-1;
+ if(summary.length>previewLimit){
+   if(paragraphEnd>=500)summaryEnd=paragraphEnd;
+   else if(sentenceEnd>=700)summaryEnd=sentenceEnd+1;
+   else summaryEnd=Math.max(1000,summary.lastIndexOf(' ',previewLimit));
+ }
+ const summaryHtml=summaryEnd>0
+   ? `<div class="handoff-summary">${markdown(summary.slice(0,summaryEnd)+'…',c)}</div><details id="report-${esc(t.id)}" class="full-response"><summary>Read full report</summary><div class="message-body">${markdown(summary,c)}</div></details>`
+   : `<div class="handoff-summary">${markdown(summary,c)}</div>`;
  const evidenceId=e=>'e-'+c.id+'-'+e.id;
  const refs=ids=>ids.map(id=>evidence.findIndex(e=>e.id===id)).filter(i=>i>=0).map(i=>`<button type="button" data-evidence="${esc(evidenceId(evidence[i]))}" aria-label="Open evidence ${i+1}">[${i+1}]</button>`).join(' ');
  const prev=c.turns.length>1?`<label class="turn-picker">Result <select id="which-turn">${c.turns.slice().reverse().map(x=>`<option value="${esc(x.id)}" ${x.id===t.id?'selected':''}>${esc(resultLabel(x))}</option>`).join('')}</select></label>`:'';
- const options=card.options.map((o,i)=>`<button class="decision-option" data-choice="${i}" data-choice-project="${esc(c.id)}" data-choice-result="${esc(t.id)}" data-choice-provider="${esc(replyProvider(c))}" data-choice-option="${esc(JSON.stringify([o.label,o.tradeoff]))}" ${['running','stopping'].includes(c.status)?'disabled':''}><strong>${i+1}. ${esc(o.label)}</strong><span>${esc(o.tradeoff||'Tradeoff not stated.')}</span></button>`).join('');
+ const options=card.options.map((o,i)=>{
+   const label=readableText(o.label).trim();
+   if(!label)return '';
+   return `<button class="decision-option" data-choice="${i}" data-choice-project="${esc(c.id)}" data-choice-result="${esc(t.id)}" data-choice-provider="${esc(replyProvider(c))}" data-choice-option="${esc(JSON.stringify([o.label,o.tradeoff]))}" ${['running','stopping'].includes(c.status)?'disabled':''}><strong>${i+1}. ${esc(label)}</strong><span>${esc(readableText(o.tradeoff).trim()||'Tradeoff not stated.')}</span></button>`;
+ }).join('');
  const unknownDecision=t.analysis==='ready' && card.decision===null && !card.decisionFormatValid;
  const sourceOnly=t.analysis==='source';
  const hasDecision=(t.analysis==='ready'&&!unknownDecision)||(sourceOnly&&card.decision);
- const actualDecision=hasDecision && typeof card.decision==='string' && card.decision.trim();
+ const question=hasDecision?readableText(card.decision).trim():'';
+ const actualDecision=!!question;
  const decisionId='decision-'+c.id+'-'+t.id;
  const status=t.analysis==='analyzing'||t.analysis==='queued'?'Preparing the report…':unknownDecision?'Check the original response for a decision.':t.analysisError;
  const retry=t.origin==='watched' && c.watch?.enabled && (t.analysis==='error'||sourceOnly||unknownDecision);
- const decisionInSummary=actualDecision && card.summary.replaceAll('**','').replace(/\s+/g,' ').includes(card.decision.replace(/\s+/g,' ').trim());
+ const decisionInSummary=actualDecision && summaryEnd<0 && summary.replaceAll('**','').replace(/\s+/g,' ').includes(question.replace(/\s+/g,' '));
  const context=decisionContext(c,t);
  const choices=hasDecision&&card.decision&&options?`<div class="decision-options">${options}</div>`:'';
- return `<section class="handoff-card">${prev}<div class="report-meta"><span class="card-kicker">${esc(name(t.provider))} · ${t.origin==='watched'?'Original chat':'Switchboard reply'}${t.phase==='finished'?'':' · '+esc(t.phase)}</span>${actualDecision?`<button type="button" class="text-button decision-jump" data-jump-decision="${esc(t.id)}" data-jump-project="${esc(c.id)}" aria-controls="${esc(decisionId)}">Jump to decision ↓</button>`:''}</div><h2>What happened</h2><div class="handoff-summary">${markdown(card.summary,c)}</div>${card.claims.map(x=>`<p class="claim">${esc(x.text)} ${x.sources.length?refs(x.sources):'<small>Agent reported</small>'}</p>`).join('')}
- ${status||retry?`<div class="analysis-status" role="status">${esc(status)} ${retry?'<button class="text-button" data-action="analyze">Retry analysis</button>':''}</div>`:''}
- ${hasDecision?`<h3 ${actualDecision?`id="${esc(decisionId)}" tabindex="-1" data-decision-result="${esc(t.id)}" data-decision-project="${esc(c.id)}"`:''}>${card.decision?'Decision':'No decision needed'}</h3>${card.decision&&!decisionInSummary?`<p>${esc(card.decision)}</p>`:''}`:''}
+ return `<section class="handoff-card">${prev}<div class="report-meta"><span class="card-kicker">${esc(name(t.provider))} · ${t.origin==='watched'?'Original chat':'Switchboard reply'}${t.phase==='finished'?'':' · '+esc(t.phase)}</span>${actualDecision?`<button type="button" class="text-button decision-jump" data-jump-decision="${esc(t.id)}" data-jump-project="${esc(c.id)}" aria-controls="${esc(decisionId)}">Jump to decision ↓</button>`:''}</div><h2>What happened</h2>${summaryHtml}${card.claims.map(x=>{const text=readableText(x.text).trim();return text?`<p class="claim">${esc(text)} ${refs(x.sources)||'<small>Agent reported</small>'}</p>`:'';}).join('')}
+ ${status||retry?`<div class="analysis-status" role="status">${esc(readableText(status))} ${retry?'<button class="text-button" data-action="analyze">Retry analysis</button>':''}</div>`:''}
+ ${hasDecision?`<h3 ${actualDecision?`id="${esc(decisionId)}" tabindex="-1" data-decision-result="${esc(t.id)}" data-decision-project="${esc(c.id)}"`:''}>${card.decision?'Decision':'No decision needed'}</h3>${question&&!decisionInSummary?`<p>${esc(question)}</p>`:''}`:''}
  ${choices&&context?`<div class="decision-body">${choices}${context}</div>`:choices||context}
- ${evidence.length?`<h3>Evidence</h3><div class="source-list">${evidence.map((e,i)=>`<details id="${esc(evidenceId(e))}"><summary>[${i+1}] ${esc(e.label)}</summary><pre>${esc(e.text)}</pre></details>`).join('')}</div>`:''}</section>`;
+ ${evidence.length?`<details class="report-evidence" id="sources-${esc(t.id)}"><summary>Evidence (${evidence.length})</summary><div class="source-list">${evidence.map((e,i)=>`<details id="${esc(evidenceId(e))}"><summary>[${i+1}] ${esc(readableText(e.label))}</summary><pre>${esc(e.text)}</pre></details>`).join('')}</div></details>`:''}</section>`;
 }
 function conversation(c,report,status){
  const messages=c.messages;
@@ -229,15 +278,24 @@ function conversation(c,report,status){
    const matches=messages.map((m,i)=>({m,i})).filter(({m})=>sameProvider(m)&&!m.imported&&!m.turnId&&m.text===report.answer&&Math.abs(m.at-report.at)<1500);
    if(matches.length===1)index=matches[0].i;
  }
- const original=index>=0?messages[index].text:report.answer;
- const fullResponse=original&&original.trim()!==String(report.card.summary??'').trim()? `<details id="response-${esc(report.id)}" class="full-response"><summary>Full response</summary><div class="message-body">${markdown(original,c)}</div></details>`:'';
+ const original=readableText(index>=0?messages[index].text:report.answer).trim();
+ const fullResponse=original&&original!==readableText(report.card.summary).trim()? `<details id="response-${esc(report.id)}" class="full-response"><summary>Full response</summary><div class="message-body">${markdown(original,c)}</div></details>`:'';
  const card=`<article id="current-report" class="message report-message">${status}${turnView(c)}${fullResponse}</article>`;
- const insertAt=index>=0?index:messages.findIndex(m=>m.at>report.at);
- if(insertAt<0)return messages.map(m=>chatMessage(c,m)).join('')+card;
- return messages.slice(0,insertAt).map(m=>chatMessage(c,m)).join('')+card+messages.slice(insertAt+(index>=0?1:0)).map(m=>chatMessage(c,m)).join('');
+ const firstLater=messages.findIndex(m=>m.at>report.at);
+ const insertAt=index>=0?index:firstLater<0?messages.length:firstLater;
+ const before=messages.slice(0,insertAt);
+ const last=before.at(-1);
+ const prompt=last?.role==='user'&&readableText(last.text).length<=340?chatMessage(c,before.pop()):'';
+ const past=before.map(m=>chatMessage(c,m)).join('');
+ const later=messages.slice(insertAt+(index>=0?1:0)).map(m=>chatMessage(c,m)).join('');
+ const older=past?`<details class="chat-history" id="earlier-${esc(report.id)}"><summary>Earlier messages</summary>${past}</details>`:'';
+ const newer=later&&report.id!==c.displayTurn?`<details class="chat-history" id="later-${esc(report.id)}"><summary>Later messages</summary>${later}</details>`:later;
+ return older+prompt+card+newer;
 }
 function chatMessage(c,m){
- return `<article class="message ${m.role==='user'?'user':'assistant'}"><div class="message-label">${m.role==='user'?'You':name(m.provider)}${m.imported?' <span>Original chat</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`;
+ const text=readableText(m.text).trim();
+ if(!text)return '';
+ return `<article class="message ${m.role==='user'?'user':'assistant'}"><div class="message-label">${m.role==='user'?'You':name(m.provider)}${m.imported?' <span>Original chat</span>':''}</div><div class="message-body">${markdown(text,c)}</div></article>`;
 }
 function jumpToDecision(button){
  const c=state.chats.find(chat=>chat.id===selected),turn=c&&visibleTurn(c);
@@ -259,7 +317,7 @@ function isUserStopped(c){
 function turnStatus(c){
  if(!c.error)return '';
  if(isUserStopped(c))return '<div class="notice" role="status"><strong>Turn stopped.</strong> Review any partial output, then send a new prompt to continue.</div>';
- return `<div class="error-card"><strong>This turn needs attention</strong><p>${esc(c.error)}</p>${/auth|oauth|sign.?in|log.?in|credential/i.test(c.error)?'<p>Your provider session may need to be refreshed.</p><button class="secondary-button" data-action="connections">Open connections ↗</button>':''}<p>If the conversation can’t be resumed, start a new provider session using the saved project context. The original provider conversation is not deleted.</p><button class="text-button" data-action="reset-session">Start a fresh ${name(c.provider)} session ↗</button></div>`;
+ return `<div class="error-card"><strong>This turn needs attention</strong><p>${esc(readableText(c.error))}</p>${/auth|oauth|sign.?in|log.?in|credential/i.test(c.error)?'<p>Your provider session may need to be refreshed.</p><button class="secondary-button" data-action="connections">Open connections ↗</button>':''}<p>If the conversation can’t be resumed, start a new provider session using the saved project context. The original provider conversation is not deleted.</p><button class="text-button" data-action="reset-session">Start a fresh ${name(c.provider)} session ↗</button></div>`;
 }
 function currentRenderedDraft(route,c){
  let shown;try{shown=JSON.parse(route?.draft);}catch{}
@@ -297,7 +355,7 @@ function chatView(c){
  const connection=replyConnectionNotice(c);
  const watch=c.watch;
  const status=`${state.storageError?`<div class="error-card" role="alert">${esc(state.storageError)}</div>`:''}
- ${watch&&(watch.error||!watch.enabled||watch.phase==='working')?`<div class="watch-status" role="status">${watch.error?esc(watch.error):watch.enabled?`${name(watch.provider)} is working in the original chat.`:'Watching paused.'}</div>`:''}
+ ${watch&&(watch.error||!watch.enabled||watch.phase==='working')?`<div class="watch-status" role="status">${watch.error?esc(readableText(watch.error)):watch.enabled?`${name(watch.provider)} is working in the original chat.`:'Watching paused.'}</div>`:''}
  ${turnStatus(c)}
  ${c.permissionNotice?`<div class="notice">${esc(c.permissionNotice)}</div>`:''}`;
  return `<section id="thread" class="thread" aria-label="Conversation" tabindex="0" data-result="${esc(report?.id||'')}"><div class="conversation">
@@ -310,16 +368,24 @@ function chatView(c){
  <div class="reply-tools">${c.demo?'<span class="demo-tag">Simulated reply</span>':`<div class="provider-picker" role="group" aria-label="Reply provider">${['codex','claude'].map(p=>`<button id="reply-${p}" type="button" data-provider="${p}" aria-pressed="${provider===p}" ${busy||changing||sending?'disabled':''}>${name(p)}</button>`).join('')}</div>`}
  <select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select>
  ${busy?`<button type="button" class="secondary-button reply-stop" data-action="stop" ${c.status==='stopping'?'disabled':''}>Stop</button>`:`<button class="send-button" type="submit" aria-label="Send reply" title="Send reply (⌘ Enter)" ${sending||changing||state.workspaceMismatch||state.webExpired?'disabled':''}><span aria-hidden="true">↑</span></button>`}</div></div>
- ${busy?`<div class="reply-status" role="status">${esc(c.activity||(c.status==='stopping'?'Stopping…':'Working…'))}</div>`:''}</form></div>`;
+ ${busy?`<div class="reply-status" role="status">${esc(readableText(c.activity).trim()||(c.status==='stopping'?'Stopping…':'Working…'))}</div>`:''}</form></div>`;
 }
 function savedDecisions(c) {
-  return [...(c.confirmedDecisions||[]).map(d=>`<li><span>✓</span>${esc(d)}</li>`),
-    ...(c.decisions||[]).map(d=>`<li>${esc(d)} <small>(unverified)</small></li>`)].join('');
+  return [...(c.confirmedDecisions||[]).map(readableText).filter(d=>d.trim()).map(d=>`<li><span>✓</span>${esc(d)}</li>`),
+    ...(c.decisions||[]).map(readableText).filter(d=>d.trim()).map(d=>`<li>${esc(d)} <small>(unverified)</small></li>`)].join('');
 }
 function pinnedRequirements(c) {
-  return `<div class="context-kicker memory-label">PINNED REQUIREMENTS</div><p class="goal">${esc(c.requirements||'Keep instructions that should carry across replies.')}</p><button class="text-button" data-action="requirements" ${['running','stopping'].includes(c.status)?'disabled':''}>${c.requirements?'Edit requirements':'Pin requirements'} ↗</button>`;
+  return `<div class="context-kicker memory-label">PINNED REQUIREMENTS</div><p class="goal">${esc(readableText(c.requirements).trim()||'Keep instructions that should carry across replies.')}</p><button class="text-button" data-action="requirements" ${['running','stopping'].includes(c.status)?'disabled':''}>${c.requirements?'Edit requirements':'Pin requirements'} ↗</button>`;
 }
-function ideaView(){return `<div class="idea-workspace"><h1>Ideas</h1><form id="idea-form"><label class="sr-only" for="idea-text">An idea for later</label><textarea id="idea-text" placeholder="Add an idea…">${esc(drafts.read('ideas').text)}</textarea><div class="idea-form-footer"><button class="primary-button" type="submit">Save idea</button></div></form><div class="idea-list">${state.ideas.map(i=>`<div class="idea-item"><p>${esc(i.text)}</p><button class="text-button" data-explore="${esc(i.id)}">Explore</button></div>`).join('')}</div></div>`;}
+function ideaContent(formId,inputId){
+ return `<form id="${formId}"><label class="sr-only" for="${inputId}">An idea for later</label><textarea id="${inputId}" placeholder="Capture an idea…">${esc(drafts.read('ideas').text)}</textarea><div class="idea-form-footer"><button class="primary-button" type="submit">Save idea</button></div></form><div class="idea-list">${state.ideas.map(i=>`<div class="idea-item"><p>${esc(readableText(i.text))}</p><button class="text-button" data-explore="${esc(i.id)}">Explore</button></div>`).join('')}</div>`;
+}
+function ideaView(){return `<div class="idea-workspace"><h1>Ideas</h1>${ideaContent('idea-form','idea-text')}</div>`;}
+function showIdeas(){
+ openModal('ideas',`<h2>Ideas</h2>${ideaContent('quick-idea-form','quick-idea-text')}`);
+ $('quick-idea-text').oninput=e=>saveDraft('ideas',e.target.value);
+ $('quick-idea-form').onsubmit=saveIdea;
+}
 async function submitPrompt(e) {
   e.preventDefault();
   const c=state.chats.find(c=>c.id===selected);
@@ -360,7 +426,21 @@ async function submitPrompt(e) {
     render();
   }
 }
-async function saveIdea(e){e.preventDefault();const text=$('idea-text').value.trim();if(!text)return;try{await api('/api/ideas',{text});saveDraft('ideas','');render();toast('Idea saved.');}catch(error){toast(error.message);}}
+async function saveIdea(e){
+ e.preventDefault();
+ const form=e.currentTarget,button=form.querySelector('[type="submit"]'),text=form.querySelector('textarea').value.trim();
+ if(!text||button.disabled)return;
+ button.disabled=true;
+ try{
+   const {idea}=await api('/api/ideas',{text});
+   state.ideas=[idea,...state.ideas.filter(item=>item.id!==idea.id)];
+   if(drafts.read('ideas').text.trim()===text)saveDraft('ideas','');
+   if(modalType==='ideas'&&$('modal').open)showIdeas();
+   else render();
+   toast('Idea saved.');
+ }catch(error){toast(error.message);}
+ finally{button.disabled=false;}
+}
 function openModal(type,html){modalType=type;$('modal').innerHTML=`<div class="modal-head"><button data-close class="icon-button" aria-label="Close dialog">×</button></div>${html}`;$('modal').showModal();$('modal').querySelector('input,textarea,button:not([data-close])')?.focus();}
 function newProject(idea=null){
  const provider=state.connections.codex?.signedIn?'codex':state.connections.claude?.signedIn?'claude':'codex';
@@ -488,7 +568,7 @@ function discoveryRows(items){return items.length?items.map(p=>{
  const batch=discoveryBatch, picked=batch.selected.has(p.id),error=batch.errors.get(p.id);
  const label=(batch.enabled?(existing?'Already followed ':picked?'Deselect ':'Select '):(existing?'Open ':'Follow '))+p.title+' · '+folder;
  const control=batch.enabled?`data-finder-select="${esc(p.id)}" aria-pressed="${picked}" ${batch.busy||existing?'disabled':''}`:`data-import="${esc(p.id)}"`;
- return `<button class="discovery-row" ${control} aria-label="${esc(label)}"><span class="provider-glyph ${p.provider}">${p.provider==='codex'?'◎':'✳'}</span><span><strong>${esc(p.title)}</strong><small>${name(p.provider)} · ${esc(folder)}</small>${status?`<small>${status}${batch.enabled?'':' · Open project'}</small>`:''}<p>${esc(p.summary.replace(/\s+/g,' ').slice(0,160))}</p>${picked?'<small>Selected</small>':''}${error?`<small role="alert">Could not follow: ${esc(error)}</small>`:''}</span><i>${batch.enabled?(existing?'✓':picked?'☑':'☐'):existing?'↗':'＋'}</i></button>`;
+ return `<button class="discovery-row" ${control} aria-label="${esc(readableText(label))}"><span class="provider-glyph ${p.provider}">${p.provider==='codex'?'◎':'✳'}</span><span><strong>${esc(readableText(p.title).trim()||'Untitled chat')}</strong><small>${name(p.provider)} · ${esc(folder)}</small>${status?`<small>${status}${batch.enabled?'':' · Open project'}</small>`:''}<p>${esc(readableText(p.summary).replace(/\s+/g,' ').slice(0,160))}</p>${picked?'<small>Selected</small>':''}${error?`<small role="alert">Could not follow: ${esc(readableText(error))}</small>`:''}</span><i>${batch.enabled?(existing?'✓':picked?'☑':'☐'):existing?'↗':'＋'}</i></button>`;
 }).join(''):`<p class="context-muted">${discoverySearch.trim()?(nextOffset!==null?'No matches in the chats loaded so far. Search older chats to keep looking.':'No matching chats found.'):nextOffset!==null?'No chats in the results loaded so far. Show older chats to keep looking.':'No local chats found. Start a new project to connect an agent.'}</p>`;}
 function focusDiscoveryNext(){
  const row=$('modal').querySelector('.discovery-row:not(:disabled)');
@@ -553,7 +633,7 @@ async function action(kind){if(kind==='reload-workspace'){location.reload();retu
    if(webSession){clearWebSession();location.reload();}else{if($('modal').open)$('modal').close();toast('Website disconnected.');}
    return;
  }
- if(modalType==='menu'&&['pin','park','pause-watch','resume-watch','ideas','demo','clear-demo'].includes(kind))$('modal').close();
+ if(modalType==='menu'&&['pin','park','pause-watch','resume-watch','demo','clear-demo'].includes(kind))$('modal').close();
  if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render({showReport:true});return;}
  if(c&&kind==='show-watched-result'){showWatchedResult(c);return;}
  if(c&&kind==='analyze'){await api(`/api/chats/${c.id}/analyze`,{turnId:visibleTurn(c)?.id});return;}
@@ -573,8 +653,9 @@ async function action(kind){if(kind==='reload-workspace'){location.reload();retu
  if(kind==='finder-follow')return followDiscoveredProjects();
  if(kind==='finder-retry')return followDiscoveredProjects(true);
  if(kind==='usage')return usage();if(kind==='new')return newProject();if(kind==='discover')return discoverProjects();if(kind==='connections')return connections();
- if(kind==='memory'&&c){openModal('memory',`<h2>Project memory</h2><p class="modal-intro">${esc(c.title)}</p><div class="context-kicker">THE DIRECTION</div><p class="goal">${esc(c.goal||'Set a goal for this project.')}</p><button class="text-button" data-action="goal">Edit goal ↗</button>${pinnedRequirements(c)}<div class="context-kicker memory-label">DECISIONS SO FAR</div><ul class="decision-list">${savedDecisions(c)||'<li>No decisions saved yet.</li>'}</ul><button class="text-button" data-action="decision">＋ Save a decision</button>`);return;}
- if(kind==='ideas'){location.hash='ideas';return choose(null);}if(kind==='next'){const id=next(selected);if(id)choose(id);return;}
+ if(kind==='memory'&&c){openModal('memory',`<h2>Project memory</h2><p class="modal-intro">${esc(c.title)}</p><div class="context-kicker">THE DIRECTION</div><p class="goal">${esc(readableText(c.goal).trim()||'Set a goal for this project.')}</p><button class="text-button" data-action="goal">Edit goal ↗</button>${pinnedRequirements(c)}<div class="context-kicker memory-label">DECISIONS SO FAR</div><ul class="decision-list">${savedDecisions(c)||'<li>No decisions saved yet.</li>'}</ul><button class="text-button" data-action="decision">＋ Save a decision</button>`);return;}
+ if(kind==='ideas')return showIdeas();
+ if(kind==='next'){const id=next(selected);if(id)choose(id);return;}
  if(['goal','decision','requirements'].includes(kind))return editText(kind);
  if(kind==='demo'){const {chat}=await api('/api/demo',{});choose(chat.id);toast('Demo mode: replies are simulated.');}
  if(kind==='clear-demo'){await api('/api/demo/clear',{});choose(null);toast('Demo chats removed.');}
@@ -586,7 +667,7 @@ async function action(kind){if(kind==='reload-workspace'){location.reload();retu
 document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||b.disabled)return;if(b.hasAttribute('data-close')){$('modal').close();return;}if(b.dataset.action){action(b.dataset.action);return;}if(b.dataset.select){if(modalType==='projects')$('modal').close();choose(b.dataset.select);$('projects-button')?.focus();return;}try{
  if(b.dataset.clearUsage){const result=await api('/api/usage',{provider:b.dataset.clearUsage,clear:true});state.usage=result.usage;usage();render();toast('Usage snapshot cleared.');return;}
  if(b.dataset.jumpDecision){jumpToDecision(b);return;}
- if(b.dataset.evidence){const item=$(b.dataset.evidence);if(item){item.open=true;item.scrollIntoView({block:'nearest'});}return;}
+ if(b.dataset.evidence){const item=$(b.dataset.evidence);if(item){const group=item.closest('.report-evidence');if(group)group.open=true;item.open=true;item.scrollIntoView({block:'nearest'});}return;}
  if(b.dataset.choice!==undefined){stageRenderedChoice(b);return;}
  if(b.dataset.provider){
    const id=selected, provider=b.dataset.provider;
@@ -620,7 +701,14 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  }catch(error){b.disabled=false;toast(error.message);}});
 document.addEventListener('submit',async e=>{const form=e.target.closest('form[data-auth-code]');if(!form)return;e.preventDefault();const input=form.elements.code,button=form.querySelector('button');button.disabled=true;try{await api('/api/connections/code',{provider:form.dataset.authCode,code:input.value});input.value='';toast('Code submitted. Waiting for the provider…');}catch(error){toast(error.message);button.disabled=false;}});
 document.addEventListener('change',async e=>{if(e.target.id==='auto'){autoAdvance=e.target.checked;localStorage.setItem('switchboard-auto',String(autoAdvance));return;}if(e.target.id==='which-turn'){viewedTurns.set(selected,e.target.value);render({showReport:true});return;}if(e.target.id==='permission')try{await api(`/api/chats/${selected}/update`,{permission:e.target.value});toast(e.target.value==='edit'?'File edits enabled for this project.':'Read-only access enabled.');}catch(error){toast(error.message);}});
-document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&$('composer')&&!$('modal').open){e.preventDefault();$('composer').requestSubmit();}if(e.altKey&&e.key.toLowerCase()==='n'&&!$('modal').open){const id=next(selected);if(id){e.preventDefault();choose(id);}}});
+document.addEventListener('keydown',e=>{
+ if(e.isComposing)return;
+ if((e.metaKey||e.ctrlKey)&&!e.altKey&&e.key.toLowerCase()==='k'&&drafts&&!$('modal').open){
+   e.preventDefault();projectPicker();return;
+ }
+ if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&$('composer')&&!$('modal').open){e.preventDefault();$('composer').requestSubmit();}
+ if(e.altKey&&e.code==='KeyN'&&!$('modal').open){const id=next(selected);if(id){e.preventDefault();choose(id);}}
+});
 $('modal').addEventListener('close',()=>modalType=null);
 $('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});
 const initial=await (async()=>{
