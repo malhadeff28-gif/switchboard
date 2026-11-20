@@ -50,3 +50,51 @@ test('Finder reveal validates reference, regular file, canonical folder and argu
   assert.equal(calls.length,2);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('genuine Codex file citations share Finder rendering and referenced-path allowlist',()=>{
+ const cwd='/Users/maxalhadeff/Documents/Codex/2026-11-20/switchboard-trial-8-transit-buffer';
+ const file=cwd+'/outputs/buffers.csv';
+ const captured=`Source: :codex-file-citation{path="${file}" artifact_kind="workbook" purpose="source"}`;
+ const options={project:{id:'transit',cwd},canReveal:true};
+ const html=renderMarkdown(captured,options);
+ assert.match(html,/buffers\.csv · Show in Finder/);
+ assert.ok(html.includes(`data-reveal-file="${file}"`));
+ assert.deepEqual(localReferences(captured),[{path:file,label:'buffers.csv'}]);
+ assert.match(renderMarkdown(`:codex-file-citation{label="<Output & CSV>" path="${file}"}`,options),/&lt;Output &amp; CSV&gt;/);
+ const code='```text\n'+captured+'\n```\n`'+captured+'`';
+ assert.doesNotMatch(renderMarkdown(code,options),/data-reveal-file/);
+ assert.deepEqual(localReferences(code),[]);
+ assert.doesNotMatch(renderMarkdown(captured,{...options,canReveal:false}),/data-reveal-file/);
+ for(const malformed of [
+  ':codex-file-citation{path=unquoted}',
+  ':codex-file-citation{path="relative.csv"}',
+  `:codex-file-citation{path="${file}" path="${file}"}`,
+  `:codex-file-citation{path="${file}" unexpected="value"}`,
+  `:codex-file-citation{path="${file}"label="No separator"}`,
+  `:codex-file-citation{path="${file}"`,
+  ':codex-file-citation{label="Missing path"}'
+ ]){
+  assert.deepEqual(localReferences(malformed),[]);
+  assert.doesNotMatch(renderMarkdown(malformed,options),/data-reveal-file/);
+ }
+ for(const target of ['/another-project/buffers.csv',cwd+'-other/buffers.csv',cwd+'/../outside.csv']){
+  assert.doesNotMatch(renderMarkdown(`:codex-file-citation{path="${target}"}`,options),/data-reveal-file/);
+ }
+});
+
+test('Codex directive references pass through canonical server validation without expanding project access',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'sb-citation-'));
+ try{
+  const folder=path.join(dir,'project');await mkdir(folder);
+  const file=path.join(folder,'buffers.csv'),outside=path.join(dir,'outside.csv');
+  await writeFile(file,'private output');await writeFile(outside,'other project');
+  const escape=path.join(folder,'escape.csv');await symlink(outside,escape);
+  const chat={cwd:folder,messages:[{text:[file,outside,escape].map(p=>`:codex-file-citation{path="${p}" artifact_kind="workbook" purpose="source"}`).join('\n')}]};
+  const calls=[];
+  const run=(...args)=>{calls.push(args);const child=new EventEmitter();queueMicrotask(()=>child.emit('close',0));return child;};
+  await revealProjectFile(chat,file,{platform:'darwin',run});
+  assert.deepEqual(calls[0][1],['-R',await realpath(file)]);
+  for(const target of [outside,escape])await assert.rejects(revealProjectFile(chat,target,{platform:'darwin',run}));
+  assert.equal(calls.length,1);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
