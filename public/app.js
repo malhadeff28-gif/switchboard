@@ -1,6 +1,6 @@
 import {renderMarkdown} from './local-files.js';
 import {draftStore,replyRequestId,choiceText,editDraft} from './drafts.js';
-let state={chats:[],ideas:[],connections:{}}, token='', root='', selected=null, modalType=null, found=[], nextOffset=null, query='', sending=false, renderTimer;
+let state={chats:[],ideas:[],connections:{}}, token='', selected=null, modalType=null, found=[], nextOffset=null, query='', sending=false, renderTimer;
 let discoverySnapshotId=null;
 let drafts;
 const switchingProvider=new Set();
@@ -175,7 +175,22 @@ async function submitPrompt(e) {
 }
 async function saveIdea(e){e.preventDefault();const text=$('idea-text').value.trim();if(!text)return;try{await api('/api/ideas',{text});saveDraft('ideas','');render();toast('Saved for the moment you want to explore it.');}catch(error){toast(error.message);}}
 function openModal(type,html){modalType=type;$('modal').innerHTML=`<div class="modal-head"><span class="modal-label">SWITCHBOARD</span><button data-close class="icon-button" aria-label="Close dialog">×</button></div>${html}`;$('modal').showModal();$('modal').querySelector('input,textarea,button:not([data-close])')?.focus();}
-function newProject(){openModal('new',`<h2>Give it a place to start.</h2><p class="modal-intro">One project, one context. Pick either agent as you go.</p><form id="new-form"><label>Project name<input name="title" required placeholder="What are you working on?" maxlength="200"></label><label>The goal<textarea name="goal" placeholder="What would a useful result look like?"></textarea></label><label>Project folder<input name="cwd" required value="${esc(root)}"></label><div class="form-pair"><label>Start with<select name="provider"><option value="codex">Codex</option><option value="claude" ${!state.connections.codex?.signedIn&&state.connections.claude?.signedIn?'selected':''}>Claude Code</option></select></label><p class="form-hint">Starts with read-only access. You can enable file edits in the chat.</p></div><button class="primary-button">Create project →</button></form>`);$('new-form').onsubmit=async e=>{e.preventDefault();try{const result=await api('/api/chats',Object.fromEntries(new FormData(e.target)));$('modal').close();state.chats.push(...(state.chats.some(c=>c.id===result.chat.id)?[]:[result.chat]));choose(result.chat.id);$('prompt').focus();}catch(error){toast(error.message);}};}
+function newProject(idea=null){
+ const provider=state.connections.codex?.signedIn?'codex':state.connections.claude?.signedIn?'claude':'codex';
+ openModal('new',`<h2>Give it a place to start.</h2><p class="modal-intro">Choose the folder this project will use. File edits, if enabled later, apply in this folder.</p><form id="new-form"><label>Project name<input name="title" required value="${esc(idea?.text.replace(/\s+/g,' ').slice(0,100)||'')}" placeholder="What are you working on?" maxlength="200"></label><label>The goal<textarea name="goal" placeholder="What would a useful result look like?">${esc(idea?.text||'')}</textarea></label><label>Project folder<input name="cwd" required placeholder="/full/path/to/your/project" autocomplete="off"></label><p class="form-hint">Enter the full path to an existing folder. This is the target for this project.</p><div class="form-pair"><label>Start with<select name="provider"><option value="codex">Codex</option><option value="claude" ${provider==='claude'?'selected':''}>Claude Code</option></select></label><p class="form-hint">Starts with read-only access. You can enable file edits in the chat.</p></div><button class="primary-button">Create project →</button></form>`);
+ const form=$('new-form');let creating=false;
+ form.onsubmit=async e=>{
+  e.preventDefault();if(creating)return;creating=true;const button=form.querySelector('button');button.disabled=true;
+  try{
+   const data=Object.fromEntries(new FormData(form));if(idea)data.id=idea.id;
+   const {chat,duplicate}=await api(idea?'/api/ideas/start':'/api/chats',data);
+   if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);
+   if(idea){state.ideas=state.ideas.filter(i=>i.id!==idea.id);if(!duplicate && !drafts.read(chat.id).text)saveDraft(chat.id,`Help me think through this idea: ${chat.goal}\nAsk me a useful question and suggest a small first step.`);}
+   $('modal').close();choose(chat.id);$('prompt').focus();
+  }catch(error){toast(error.message);}finally{creating=false;button.disabled=false;}
+ };
+}
+
 function usageLabel(provider){const u=state.usage?.[provider];if(!u)return 'Usage: add snapshot';const expired=u.resetAt&&Date.now()>=Date.parse(u.resetAt);return `${name(provider)}: ${u.used}% used${expired?' · reset passed':''} · manual`;}
 function localDateTime(iso){if(!iso)return '';const d=new Date(iso);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
 function usage(){openModal('usage',`<h2>Usage limits</h2><p class="modal-intro">Record a snapshot from each provider’s usage page. Values are manual, can become stale, and do not update or reset automatically. Check your provider for the current limit.</p><div class="usage-grid">${['codex','claude'].map(p=>{const u=state.usage?.[p];return `<form class="usage-form" data-usage="${p}"><strong>${name(p)}</strong><p>${u?`Last saved ${esc(new Date(u.updatedAt).toLocaleString())}${u.resetAt&&Date.now()>=Date.parse(u.resetAt)?' · reset time passed; update this snapshot':''}`:'No snapshot saved.'}</p><label>Percentage used<input name="used" type="number" min="0" max="100" step="any" required value="${u?esc(u.used):''}" placeholder="e.g. 65"></label><label>Reset time (optional)<input name="resetAt" type="datetime-local" value="${esc(localDateTime(u?.resetAt))}"></label><div class="usage-actions"><button class="primary-button" type="submit">Save snapshot</button>${u?`<button class="text-button" type="button" data-clear-usage="${p}">Clear</button>`:''}</div></form>`;}).join('')}</div><p class="fine-print">These notes are stored on this computer. Switchboard does not enforce provider limits or track usage outside this app.</p>`);
@@ -346,14 +361,14 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.dataset.login){await api('/api/connections/login',{provider:b.dataset.login});return;}
  if(b.dataset.revealFile){b.disabled=true;await api(`/api/chats/${b.dataset.revealProject}/reveal-file`,{path:b.dataset.revealFile});b.disabled=false;toast('Selected the file in Finder.');return;}
  if(b.dataset.import){b.disabled=true;await selectDiscoveredProject(b.dataset.import);return;}
- if(b.dataset.explore){const {chat}=await api('/api/ideas/start',{id:b.dataset.explore,provider:state.connections.codex?.signedIn?'codex':'claude'});if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);saveDraft(chat.id,`Help me think through this idea: ${chat.goal}\nAsk me a useful question and suggest a small first step.`);choose(chat.id);$('prompt').focus();}
+ if(b.dataset.explore){const idea=state.ideas.find(i=>i.id===b.dataset.explore);if(idea)newProject(idea);}
  }catch(error){b.disabled=false;toast(error.message);}});
 document.addEventListener('submit',async e=>{const form=e.target.closest('form[data-auth-code]');if(!form)return;e.preventDefault();const input=form.elements.code,button=form.querySelector('button');button.disabled=true;try{await api('/api/connections/code',{provider:form.dataset.authCode,code:input.value});input.value='';toast('Code submitted. Waiting for the provider…');}catch(error){toast(error.message);button.disabled=false;}});
 document.addEventListener('change',async e=>{if(e.target.id==='which-turn'){viewedTurns.set(selected,e.target.value);render();return;}if(e.target.id==='permission')try{await api(`/api/chats/${selected}/update`,{permission:e.target.value});toast(e.target.value==='edit'?'File edits enabled for this project.':'Read-only access enabled.');}catch(error){toast(error.message);}});
 document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&$('composer')&&!$('modal').open){e.preventDefault();$('composer').requestSubmit();}if(e.altKey&&e.key.toLowerCase()==='n'&&!$('modal').open){e.preventDefault();choose(next(selected));}});
 $('modal').addEventListener('close',()=>modalType=null);
 $('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});
-const initial=await api('/api/bootstrap');drafts=draftStore(localStorage,initial.workspace);state=initial;token=initial.token;root=initial.root;selected=location.hash==='#ideas'?null:localStorage.getItem('switchboard-selected')||next(null);if(selected&&!state.chats.some(c=>c.id===selected))selected=next(null);render();
+const initial=await api('/api/bootstrap');drafts=draftStore(localStorage,initial.workspace);state=initial;token=initial.token;selected=location.hash==='#ideas'?null:localStorage.getItem('switchboard-selected')||next(null);if(selected&&!state.chats.some(c=>c.id===selected))selected=next(null);render();
 if(location.hash==='#connections')connections();
 window.addEventListener('hashchange',()=>{
   if(location.hash==='#ideas')choose(null);

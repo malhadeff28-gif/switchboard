@@ -361,7 +361,8 @@ const server=http.createServer(async(req,res)=>{
 
       if(route==='/api/chats'){
         const title=string(data.title,200);if(!title)throw new Error('Give your project a name.');
-        const chat=newChat({title,goal:string(data.goal||''),cwd:validCwd(data.cwd||root),provider:validProvider(data.provider)});state.chats.push(chat);update({immediate:true});send(res,201,{chat});return;
+        const chat=newChat({title,goal:string(data.goal||''),cwd:validCwd(data.cwd),provider:validProvider(data.provider)});
+        const chats=[...state.chats,chat];save({...state,chats});state.chats=chats;publish();send(res,201,{chat});return;
       }
       if(route==='/api/import'){
         const source=discoveredById.get(data.id)||(await discovery()).find(p=>p.id===data.id);if(!source)throw new Error('This project is no longer available. Refresh discovery.');
@@ -375,7 +376,23 @@ const server=http.createServer(async(req,res)=>{
       }
       if(route==='/api/demo/clear'){for(const c of state.chats.filter(c=>c.demo)){const job=jobs.get(c.id);if(job?.timer)clearTimeout(job.timer);jobs.delete(c.id);}state.chats=state.chats.filter(c=>!c.demo);update({immediate:true});send(res,200,{ok:true});return;}
       if(route==='/api/ideas'){const text=string(data.text,5000);if(!text)throw new Error('Write an idea first.');const idea={id:randomUUID(),text,at:Date.now()};state.ideas.unshift(idea);update({immediate:true});send(res,201,{idea});return;}
-      if(route==='/api/ideas/start'){const idea=state.ideas.find(i=>i.id===data.id);if(!idea)throw new Error('Idea not found.');const chat=newChat({title:idea.text.replace(/\s+/g,' ').slice(0,100),goal:idea.text,cwd:validCwd(data.cwd||root),provider:validProvider(data.provider||'codex')});state.chats.push(chat);state.ideas=state.ideas.filter(i=>i.id!==idea.id);update({immediate:true});send(res,201,{chat});return;}
+      if(route==='/api/ideas/start'){
+        const cwd=validCwd(data.cwd),provider=validProvider(data.provider||'codex');
+        if(typeof data.id!=='string'||!data.id)throw new Error('Idea not found.');
+        if(data.title!==undefined && !string(data.title,200))throw new Error('Give your project a name.');
+        const existing=state.chats.find(c=>c.ideaId===data.id);
+        if(existing){
+          if(realpathSync(existing.cwd)!==realpathSync(cwd))throw Object.assign(new Error('This idea already started in a different project folder. Open that project or save a new idea.'),{status:409});
+          send(res,200,{chat:existing,duplicate:true});return;
+        }
+        const idea=state.ideas.find(i=>i.id===data.id);if(!idea)throw new Error('Idea not found.');
+        const title=string(data.title??idea.text.replace(/\s+/g,' ').slice(0,100),200);
+        if(!title)throw new Error('Give your project a name.');
+        const goal=string(data.goal??idea.text);
+        const chat=newChat({title,goal,cwd,provider,ideaId:idea.id});
+        const next={...state,chats:[...state.chats,chat],ideas:state.ideas.filter(i=>i.id!==idea.id)};
+        save(next);state.chats=next.chats;state.ideas=next.ideas;publish();send(res,201,{chat});return;
+      }
       const match=route.match(/^\/api\/chats\/([^/]+)\/(send|update|park|stop|delete|reset-session|pause-watch|resume-watch|analyze)$/);
       if(match){const chat=requiredChat(match[1]);const action=match[2];
         if(action==='pause-watch'){monitor.pause(chat);send(res,200,{ok:true});return;}
