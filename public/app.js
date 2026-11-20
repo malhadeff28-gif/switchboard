@@ -37,7 +37,9 @@ function markdown(text){return esc(String(text||'').trim()).replace(/```[^\n]*\n
 function row(c){const active=c.id===selected;return `<button class="project-row ${active?'selected':''}" data-select="${c.id}"><span class="state-dot ${c.status}"></span><span class="project-copy"><span class="project-name">${esc(c.title)}</span><span class="project-sub">${c.demo?'Demo · ':''}${name(c.provider)} · ${c.status==='watching'?'Working in original chat':c.status==='running'?'Working':c.status==='stopping'?'Stopping':c.status==='parked'?'Caught up':c.error?'Needs attention':'Ready for you'}</span></span>${c.priority?' <span class="star">★</span>':''}</button>`;}
 function render(){
  const focus=document.activeElement?.id, start=document.activeElement?.selectionStart, end=document.activeElement?.selectionEnd;
- const scroll=$('thread')?.scrollTop;const previousChat=$('workspace')?.dataset.chat;
+ const previousThread=$('thread'), previousChat=$('workspace')?.dataset.chat;
+ const scroll=previousThread?.scrollTop;
+ const openEvidence=[...(previousThread?.querySelectorAll('.handoff-card details[open][id]')??[])].map(item=>item.id);
  const chat=state.chats.find(c=>c.id===selected);
  const running=state.chats.filter(c=>['running','stopping','watching'].includes(c.status));const parked=state.chats.filter(c=>c.status==='parked');
  const filtered=c=>!query||c.title.toLowerCase().includes(query.toLowerCase());
@@ -64,7 +66,14 @@ function render(){
  if(focus && $(focus) && previousChat===($('workspace')?.dataset.chat)){
    $(focus).focus({preventScroll:true});if(typeof start==='number' && $(focus).setSelectionRange)$(focus).setSelectionRange(start,end);
  }
- if($('thread') && previousChat===selected && scroll!==undefined)$('thread').scrollTop=scroll;
+ const thread=$('thread');
+ if(thread && previousChat===selected){
+   for(const id of openEvidence){
+     const item=$(id);
+     if(item)item.open=true;
+   }
+   if(scroll!==undefined)thread.scrollTop=scroll;
+ }
 }
 function firstRun(){
  const connected=Object.values(state.connections).some(p=>p.signedIn);
@@ -112,7 +121,7 @@ function turnView(c){
 }
 function chatView(c){const busy=['running','stopping'].includes(c.status);const provider=replyProvider(c);const changing=switchingProvider.has(c.id);return `<div class="focus-heading"><div class="breadcrumb">${c.demo?'<span class="demo-tag">SIMULATED DEMO</span>':'PROJECT'} <span>/</span> ${busy?'Working in the background':c.status==='parked'?'Caught up':'Your next move'}</div><div class="title-line"><h1>${esc(c.title)}</h1><button class="icon-button ${c.priority?'pinned':''}" data-action="pin" title="Prioritize this project" aria-label="Prioritize this project">☆</button></div>
  <div class="project-meta"><div class="provider-picker"><button data-provider="codex" ${busy||changing||sending?'disabled':''} class="${provider==='codex'?'chosen':''}"><span class="provider-glyph codex">◎</span> Codex</button><button data-provider="claude" ${busy||changing||sending?'disabled':''} class="${provider==='claude'?'chosen':''}"><span class="provider-glyph claude">✳</span> Claude</button></div><button class="usage-shortcut" data-action="usage">${usageLabel(provider)}</button><span class="context-note">${c.sourceId?(c.sessions?.[provider]?'Continue Switchboard session':'Reply starts a separate '+name(provider)+' session'):'Context stays with your project'}</span><select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select></div></div>
- <div id="thread" class="thread">${state.storageError?`<div class="error-card" role="alert">${esc(state.storageError)}</div>`:''}${c.watch?`<div class="watch-status">${c.watch.enabled?`Watching ${name(c.watch.provider)} · ${esc(c.watch.phase)}`:'Watching paused'} ${c.watch.enabled?'<button class="text-button" data-action="pause-watch">Pause</button>':'<button class="text-button" data-action="discover">Choose chats to resume</button>'}${c.watch.error?`<p>${esc(c.watch.error)}</p>`:''}</div>`:''}${c.error?`<div class="error-card"><strong>This turn needs attention</strong><p>${esc(c.error)}</p>${/auth|oauth|sign.?in|log.?in|credential/i.test(c.error)?'<p>Your provider session may need to be refreshed.</p><button class="secondary-button" data-action="connections">Open connections ↗</button>':''}<p>If the conversation can’t be resumed, start a new provider session using the saved project context. The original provider conversation is not deleted.</p><button class="text-button" data-action="reset-session">Start a fresh ${name(c.provider)} session ↗</button></div>`:''}
+ <div id="thread" class="thread">${state.storageError?`<div class="error-card" role="alert">${esc(state.storageError)}</div>`:''}${c.watch?`<div class="watch-status">${c.watch.enabled?`Watching ${name(c.watch.provider)} · ${esc(c.watch.phase)}`:'Watching paused'} ${c.watch.enabled?'<button class="text-button" data-action="pause-watch">Pause</button>':'<button class="text-button" data-action="resume-watch">Resume</button>'}${c.watch.error?`<p>${esc(c.watch.error)}</p>`:''}</div>`:''}${c.error?`<div class="error-card"><strong>This turn needs attention</strong><p>${esc(c.error)}</p>${/auth|oauth|sign.?in|log.?in|credential/i.test(c.error)?'<p>Your provider session may need to be refreshed.</p><button class="secondary-button" data-action="connections">Open connections ↗</button>':''}<p>If the conversation can’t be resumed, start a new provider session using the saved project context. The original provider conversation is not deleted.</p><button class="text-button" data-action="reset-session">Start a fresh ${name(c.provider)} session ↗</button></div>`:''}
  ${c.permissionNotice?`<div class="notice">${esc(c.permissionNotice)}</div>`:''}
  ${c.unseenWatchedTurn&&visibleTurn(c)?.id!==c.unseenWatchedTurn?`<div class="notice">Your original chat finished while this reply was running. <button type="button" class="text-button" data-action="show-watched-result">Open its result ↗</button></div>`:''}
  ${turnView(c)}
@@ -259,7 +268,7 @@ async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
  if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render();return;}
  if(c&&kind==='show-watched-result'){viewedTurns.set(c.id,c.unseenWatchedTurn);render();return;}
  if(c&&kind==='analyze'){await api(`/api/chats/${c.id}/analyze`,{turnId:visibleTurn(c)?.id});return;}
- if(c&&kind==='pause-watch'){await api(`/api/chats/${c.id}/pause-watch`,{});return;}
+ if(c&&['pause-watch','resume-watch'].includes(kind)){await api(`/api/chats/${c.id}/${kind}`,{});return;}
  if(kind==='older-chats'&&nextOffset!==null){
    const snapshot=discoverySnapshotId, offset=nextOffset;
    const page=await api('/api/discover?'+new URLSearchParams({offset,snapshot}));

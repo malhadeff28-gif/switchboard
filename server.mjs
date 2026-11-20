@@ -349,9 +349,17 @@ const server=http.createServer(async(req,res)=>{
       if(route==='/api/demo/clear'){for(const c of state.chats.filter(c=>c.demo)){const job=jobs.get(c.id);if(job?.timer)clearTimeout(job.timer);jobs.delete(c.id);}state.chats=state.chats.filter(c=>!c.demo);update({immediate:true});send(res,200,{ok:true});return;}
       if(route==='/api/ideas'){const text=string(data.text,5000);if(!text)throw new Error('Write an idea first.');const idea={id:randomUUID(),text,at:Date.now()};state.ideas.unshift(idea);update({immediate:true});send(res,201,{idea});return;}
       if(route==='/api/ideas/start'){const idea=state.ideas.find(i=>i.id===data.id);if(!idea)throw new Error('Idea not found.');const chat=newChat({title:idea.text.replace(/\s+/g,' ').slice(0,100),goal:idea.text,cwd:validCwd(data.cwd||root),provider:validProvider(data.provider||'codex')});state.chats.push(chat);state.ideas=state.ideas.filter(i=>i.id!==idea.id);update({immediate:true});send(res,201,{chat});return;}
-      const match=route.match(/^\/api\/chats\/([^/]+)\/(send|update|park|stop|delete|reset-session|pause-watch|analyze)$/);
+      const match=route.match(/^\/api\/chats\/([^/]+)\/(send|update|park|stop|delete|reset-session|pause-watch|resume-watch|analyze)$/);
       if(match){const chat=requiredChat(match[1]);const action=match[2];
         if(action==='pause-watch'){monitor.pause(chat);send(res,200,{ok:true});return;}
+        if(action==='resume-watch'){
+          if(!chat.watch)throw new Error('This project does not have a chat to resume watching.');
+          if(!chat.watch.enabled){
+            const {provider,file,session}=chat.watch;
+            await monitor.watch(chat,{provider,transcriptPath:file,sourceSession:session});
+          }
+          send(res,200,{ok:true});return;
+        }
         if(action==='analyze'){const t=chat.turns?.find(t=>t.id===data.turnId);if(!chat.watch?.enabled||t?.origin!=='watched'||t.phase!=='finished')throw new Error('Follow this chat to analyze its completed turn.');if(t.analysis!=='analyzing'){t.analysis='queued';monitor.schedule();update({immediate:true});}send(res,202,{ok:true});return;}
         if(action==='send'){
           if(typeof data.text!=='string' || !data.text.trim())throw Error('Write a prompt first.');
