@@ -1,5 +1,5 @@
 import {renderMarkdown} from './local-files.js';
-import {draftStore,replyRequestId,choiceText,editDraft} from './drafts.js';
+import {draftStore,replyRequestId,choiceText,editDraft,sameDraft} from './drafts.js';
 let state={chats:[],ideas:[],connections:{}}, token='', selected=null, modalType=null, found=[], nextOffset=null, query='', sending=false, renderTimer;
 let discoverySnapshotId=null;
 let discoveryBatch={enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0};
@@ -44,9 +44,9 @@ async function api(route,data,retry=true) {
   if(!response.ok)throw new Error(json.error||'Something went wrong.');
   return json;
 }
-function saveDraft(id,text,choiceTarget,renderedTarget) {
+function saveDraft(id,text,choiceTarget,renderedTarget,baseDraft) {
   if (!text.trim()) return drafts.write(id,{text:''});
-  const old=drafts.read(id);
+  const old=baseDraft||drafts.read(id);
   const chat=state.chats.find(c=>c.id===id);
   const target=choiceTarget || (old.text.trim() ? old : renderedTarget || {turnId:chat?visibleTurn(chat)?.id??null:null,provider:chat?.provider});
   return drafts.write(id,{...editDraft(target,text),...(choiceTarget?{choice:choiceTarget.choice}:{}),id:target.id||crypto.randomUUID()});
@@ -98,8 +98,8 @@ function firstRun(){
  return `<div class="idea-workspace setup"><h1>Bring your chats into Switchboard.</h1><p class="idea-intro">See what your agents finished, review the evidence, and send your next decision from here.</p><ol><li><strong>Connect Codex or Claude Code</strong><p>${connected?'A provider sign-in was found on this computer.':'Use either provider with your own account.'}</p><button class="secondary-button" data-action="connections">Connections</button></li><li><strong>Choose your chats</strong><p>Pick the conversations you want Switchboard to follow.</p><button class="primary-button" data-action="discover">Choose chats →</button></li><li><strong>Open the latest result</strong><p>Read the handoff and send a choice or your own reply.</p></li></ol><button class="text-button" data-action="demo">Try a simulated project</button> · <button class="text-button" data-action="ideas">Open ideas</button></div>`;
 }
 const viewedTurns=new Map();
-function visibleTurn(c) {
-  const id=viewedTurns.get(c.id)??drafts.read(c.id).turnId??c.displayTurn;
+function visibleTurn(c,draft=drafts.read(c.id)) {
+  const id=viewedTurns.get(c.id)??draft.turnId??c.displayTurn;
   return c.turns?.find(t=>t.id===id) || c.turns?.at(-1);
 }
 function watchedResultToReview(c){
@@ -117,9 +117,10 @@ function watchedResultToReview(c){
 function watchedResultNotice(c){
  return watchedResultToReview(c)?'<div class="notice">Your original chat has another result to review. <button type="button" class="text-button" data-action="show-watched-result">Open its result ↗</button></div>':'';
 }
-function updateReplyContext(c){
+function updateReplyContext(c,draft=drafts.read(c.id)){
+ const composer=$('composer');if(composer)composer.dataset.draft=JSON.stringify(draft);
  const target=$('reply-target'),notice=$('watched-result-notice');
- const targetHtml=replyTarget(c),noticeHtml=watchedResultNotice(c);
+ const targetHtml=replyTarget(c,draft),noticeHtml=watchedResultNotice(c);
  if(target&&target.innerHTML!==targetHtml)target.innerHTML=targetHtml;
  if(notice){if(notice.innerHTML!==noticeHtml)notice.innerHTML=noticeHtml;notice.hidden=!noticeHtml;}
  updateReplyConnection(c);
@@ -142,10 +143,9 @@ function replyConnectionNotice(c){
  const message=connection.installed===false?`Install the ${name(provider)} coding CLI in Connections before sending this reply.`:connection.signedIn===false&&!connection.connectionError?`Sign in to ${name(provider)} in Connections before sending this reply.`:'';
  return message?`<div class="notice" role="status">${esc(message)} <button type="button" class="text-button" data-action="connections">Open Connections ↗</button></div>`:'';
 }
-function replyProvider(c) { return drafts.read(c.id).provider || c.provider; }
-function replyAnchor(c) {
-  const draft=drafts.read(c.id);
-  if (!draft.text.trim()) return visibleTurn(c)?.id??null;
+function replyProvider(c,draft=drafts.read(c.id)) { return draft.provider || c.provider; }
+function replyAnchor(c,draft=drafts.read(c.id)) {
+  if (!draft.text.trim()) return visibleTurn(c,draft)?.id??null;
   // Older drafts without a recorded result must not be attached to a newer result.
   return draft.turnId??null;
 }
@@ -155,13 +155,13 @@ function resultLabel(turn) {
  const preview=question.length>90?question.slice(0,89)+'…':question;
  return `${origin} · ${name(turn.provider)} · ${new Date(turn.at).toLocaleString()} · ${turn.phase}${preview?' · '+preview:''}`;
 }
-function replyTarget(c) {
-  const id=replyAnchor(c);
-  const provider=name(replyProvider(c));
+function replyTarget(c,draft=drafts.read(c.id)) {
+  const id=replyAnchor(c,draft);
+  const provider=name(replyProvider(c,draft));
   if (id===null) return 'Sending to '+provider+' for this project';
   const turn=c.turns?.find(t=>t.id===id);
   if (!turn) return 'This draft’s result is unavailable. Clear the draft to start again.';
-  const show=visibleTurn(c)?.id!==id ? ' <button type="button" class="text-button" data-action="show-draft-result">Show draft’s result ↗</button>' : '';
+  const show=visibleTurn(c,draft)?.id!==id ? ' <button type="button" class="text-button" data-action="show-draft-result">Show draft’s result ↗</button>' : '';
   return `Sending to ${provider} about ${esc(resultLabel(turn))}${show}`;
 }
 function turnView(c){
@@ -206,14 +206,22 @@ function turnStatus(c){
  if(isUserStopped(c))return '<div class="notice" role="status"><strong>Turn stopped.</strong> Review any partial output, then send a new prompt to continue.</div>';
  return `<div class="error-card"><strong>This turn needs attention</strong><p>${esc(c.error)}</p>${/auth|oauth|sign.?in|log.?in|credential/i.test(c.error)?'<p>Your provider session may need to be refreshed.</p><button class="secondary-button" data-action="connections">Open connections ↗</button>':''}<p>If the conversation can’t be resumed, start a new provider session using the saved project context. The original provider conversation is not deleted.</p><button class="text-button" data-action="reset-session">Start a fresh ${name(c.provider)} session ↗</button></div>`;
 }
+function currentRenderedDraft(route,c){
+ let shown;try{shown=JSON.parse(route?.draft);}catch{}
+ if(!sameDraft(shown,drafts.read(c.id))){
+  render();toast('Your draft changed in another tab. Review the latest draft before continuing.');return null;
+ }
+ return shown;
+}
 function handlePromptInput(e){
  const route=$('composer')?.dataset;
  const c=state.chats.find(chat=>chat.id===route?.project);
  if(!c||c.id!==selected)return;
+ const captured=currentRenderedDraft(route,c);if(!captured)return;
  const shown=route.result||null;
- saveDraft(c.id,e.target.value,undefined,{turnId:shown,provider:route.provider});
+ const saved=saveDraft(c.id,e.target.value,undefined,{turnId:shown,provider:route.provider},captured);
  if(shown!==(visibleTurn(c)?.id??null)){render();return;}
- updateReplyContext(c);
+ updateReplyContext(c,saved);
 }
 function stageRenderedChoice(button){
  const data=button.dataset,c=state.chats.find(chat=>chat.id===data.choiceProject);
@@ -222,12 +230,13 @@ function stageRenderedChoice(button){
  if(!c||c.id!==selected||!option||JSON.stringify([option.label,option.tradeoff])!==data.choiceOption||!['codex','claude'].includes(data.choiceProvider)||['running','stopping'].includes(c.status)){
   render();toast('This result changed. Review the shown options before choosing again.');return;
  }
- if(drafts.read(c.id).text.trim()){toast('Send or clear your current draft before choosing an option.');return;}
+ const captured=currentRenderedDraft($('composer')?.dataset,c);if(!captured)return;
+ if(captured.text.trim()){toast('Send or clear your current draft before choosing an option.');return;}
  const value=choiceText(index,option);
- saveDraft(c.id,value,{turnId:t.id,provider:data.choiceProvider,choice:{index,label:option.label,tradeoff:option.tradeoff}});
- $('prompt').value=value;updateReplyContext(c);$('prompt').focus();
+ const saved=saveDraft(c.id,value,{turnId:t.id,provider:data.choiceProvider,choice:{index,label:option.label,tradeoff:option.tradeoff}},undefined,captured);
+ $('prompt').value=value;updateReplyContext(c,saved);$('prompt').focus();
 }
-function chatView(c){const busy=['running','stopping'].includes(c.status);const provider=replyProvider(c);const changing=switchingProvider.has(c.id);return `<div class="focus-heading"><div class="breadcrumb">${c.demo?'<span class="demo-tag">SIMULATED DEMO</span>':'PROJECT'} <span>/</span> ${busy?'Working in the background':c.status==='parked'?'Caught up':'Your next move'}</div><div class="title-line"><h1>${esc(c.title)}</h1><button class="icon-button ${c.priority?'pinned':''}" data-action="pin" title="Prioritize this project" aria-label="Prioritize this project">☆</button></div>
+function chatView(c){const draft=drafts.read(c.id);const busy=['running','stopping'].includes(c.status);const provider=replyProvider(c,draft);const changing=switchingProvider.has(c.id);return `<div class="focus-heading"><div class="breadcrumb">${c.demo?'<span class="demo-tag">SIMULATED DEMO</span>':'PROJECT'} <span>/</span> ${busy?'Working in the background':c.status==='parked'?'Caught up':'Your next move'}</div><div class="title-line"><h1>${esc(c.title)}</h1><button class="icon-button ${c.priority?'pinned':''}" data-action="pin" title="Prioritize this project" aria-label="Prioritize this project">☆</button></div>
  <div class="project-meta"><div class="provider-picker"><button data-provider="codex" ${busy||changing||sending?'disabled':''} class="${provider==='codex'?'chosen':''}"><span class="provider-glyph codex">◎</span> Codex</button><button data-provider="claude" ${busy||changing||sending?'disabled':''} class="${provider==='claude'?'chosen':''}"><span class="provider-glyph claude">✳</span> Claude</button></div><button class="usage-shortcut" data-action="usage">${usageLabel(provider)}</button><span class="context-note">${c.sourceId?(c.sessions?.[provider]?'Continue Switchboard session':'Reply starts a separate '+name(provider)+' session'):'Context stays with your project'}</span><select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select></div></div>
  <div id="thread" class="thread">${state.storageError?`<div class="error-card" role="alert">${esc(state.storageError)}</div>`:''}${c.watch?`<div class="watch-status">${c.watch.enabled?`Watching ${name(c.watch.provider)} · ${esc(c.watch.phase)}`:'Watching paused'} ${c.watch.enabled?'<button class="text-button" data-action="pause-watch">Pause</button>':'<button class="text-button" data-action="resume-watch">Resume</button>'}${c.watch.error?`<p>${esc(c.watch.error)}</p>`:''}</div>`:''}${turnStatus(c)}
  ${c.permissionNotice?`<div class="notice">${esc(c.permissionNotice)}</div>`:''}
@@ -235,7 +244,7 @@ function chatView(c){const busy=['running','stopping'].includes(c.status);const 
  ${turnView(c)}
  ${c.messages.length?`<details class="conversation" ${c.messages.some(m=>!m.imported)?'open':''}><summary>Conversation <span>${c.messages.length} messages${c.messages.every(m=>m.imported)?' · imported excerpt':''}</span></summary>${c.messages.map(m=>`<article class="message ${m.role}"><div class="message-label">${m.role==='user'?'YOU':name(m.provider)}${m.imported?' <span>Imported context</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`).join('')}</details>`:''}
  ${busy?`<section class="working-card"><span class="pulse-dot"></span><strong>${esc(c.activity||'Working on your request')}</strong><button data-action="stop" class="text-button" ${c.status==='stopping'?'disabled':''}>${c.status==='stopping'?'Stopping…':'Stop'}</button>${c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0],c)}</div>`:''}</section>`:''}</div>
- <div class="composer-wrap">${editOverlapNotice(c)}${c.status==='parked'?'<div class="composer-note">This chat is caught up. Send a prompt whenever you want to continue.</div>':''}<div id="reply-connection-notice" ${replyConnectionNotice(c)?'':'hidden'}>${replyConnectionNotice(c)}</div><form id="composer" data-project="${esc(c.id)}" data-result="${esc(visibleTurn(c)?.id||'')}" data-provider="${esc(provider)}"><div id="reply-target" class="composer-note">${replyTarget(c)}</div><label class="sr-only" for="prompt">Your prompt for ${name(provider)}</label><textarea id="prompt" placeholder="Give ${name(provider)} a direction…" ${busy||sending?'disabled':''}>${esc(drafts.read(c.id).text)}</textarea><div class="composer-footer"><span>${busy?'This agent is working. Your next chat is ready when you are.':autoAdvance?'Your agent keeps going. You move to the next chat.':'You’ll stay here after sending.'}</span><button class="send-button" type="submit" ${busy||sending||changing||state.workspaceMismatch?'disabled':''}>${busy?'Working…':'Send'} <span>↗</span></button></div></form><div class="below-composer"><button class="text-button" data-action="park" ${busy?'disabled':''}>✓ I’m caught up</button><button class="text-button mobile-memory" data-action="memory">Project memory</button><button class="text-button" data-action="next">Next ready chat →</button></div></div>`;}
+ <div class="composer-wrap">${editOverlapNotice(c)}${c.status==='parked'?'<div class="composer-note">This chat is caught up. Send a prompt whenever you want to continue.</div>':''}<div id="reply-connection-notice" ${replyConnectionNotice(c)?'':'hidden'}>${replyConnectionNotice(c)}</div><form id="composer" data-project="${esc(c.id)}" data-draft="${esc(JSON.stringify(draft))}" data-result="${esc(visibleTurn(c,draft)?.id||'')}" data-provider="${esc(provider)}"><div id="reply-target" class="composer-note">${replyTarget(c,draft)}</div><label class="sr-only" for="prompt">Your prompt for ${name(provider)}</label><textarea id="prompt" placeholder="Give ${name(provider)} a direction…" ${busy||sending?'disabled':''}>${esc(draft.text)}</textarea><div class="composer-footer"><span>${busy?'This agent is working. Your next chat is ready when you are.':autoAdvance?'Your agent keeps going. You move to the next chat.':'You’ll stay here after sending.'}</span><button class="send-button" type="submit" ${busy||sending||changing||state.workspaceMismatch?'disabled':''}>${busy?'Working…':'Send'} <span>↗</span></button></div></form><div class="below-composer"><button class="text-button" data-action="park" ${busy?'disabled':''}>✓ I’m caught up</button><button class="text-button mobile-memory" data-action="memory">Project memory</button><button class="text-button" data-action="next">Next ready chat →</button></div></div>`;}
 function savedDecisions(c) {
   return [...(c.confirmedDecisions||[]).map(d=>`<li><span>✓</span>${esc(d)}</li>`),
     ...(c.decisions||[]).map(d=>`<li>${esc(d)} <small>(unverified)</small></li>`)].join('');
@@ -250,19 +259,22 @@ async function submitPrompt(e) {
   e.preventDefault();
   const c=state.chats.find(c=>c.id===selected);
   if (!c || state.workspaceMismatch || sending || switchingProvider.has(c.id) || ['running','stopping'].includes(c.status)) return;
+  const route=$('composer')?.dataset;
+  if(route?.project!==c.id)return;
+  let draft=currentRenderedDraft(route,c);
+  if(!draft)return;
   const text=$('prompt').value.trim();
   if (!text) return;
   if (text.length>50000) {toast('Your reply is over 50,000 characters. Shorten it and try again.');return;}
   const expectedPermission=$('permission').value;
   sending=true;
   try {
-    let draft=drafts.read(c.id);
     if(draft.text.trim() && draft.text.trim()!==text){
       toast('Your draft changed in another tab. Review the latest draft before sending.');
       return;
     }
-    if(!draft.text.trim())draft=saveDraft(c.id,text);
-    const provider=draft.provider||c.provider, turnId=draft.turnId??null;
+    if(!draft.text.trim())draft=saveDraft(c.id,text,undefined,{turnId:route.result||null,provider:route.provider},draft);
+    const provider=draft.provider||route.provider, turnId=draft.turnId??null;
     if(!draft.id || !draft.provider)draft=drafts.write(c.id,{...draft,id:draft.id||crypto.randomUUID(),provider,turnId});
     const payload={text,provider,turnId,...(draft.choice?{choice:draft.choice}:{})};
     // Persist the draft identity before any request. An identical retry after
@@ -484,6 +496,9 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.dataset.provider){
    const id=selected, provider=b.dataset.provider;
    if(sending||switchingProvider.has(id))return;
+   const current=state.chats.find(chat=>chat.id===id);
+   if(!current)return;
+   const captured=currentRenderedDraft($('composer')?.dataset,current);if(!captured)return;
    switchingProvider.add(id);
    render();
    try {
@@ -492,7 +507,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
      if(!c)return;
      c.provider=provider;
      const draft=drafts.read(id);
-     if(draft.text.trim())drafts.write(id,{...draft,provider});
+     if(sameDraft(captured,draft)&&draft.text.trim())drafts.write(id,{...draft,provider});
      toast(`Replies will go to ${name(provider)}.`);
    } finally {
      switchingProvider.delete(id);

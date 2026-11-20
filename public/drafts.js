@@ -63,3 +63,8 @@ export function sameChoice(first,second) {
   return first===second || (first!=null && second!=null && first.index===second.index &&
     first.label===second.label && first.tradeoff===second.tradeoff);
 }
+
+export function sameDraft(first,second) {
+  return !!first && !!second && first.id===second.id && first.text===second.text &&
+    first.provider===second.provider && first.turnId===second.turnId && sameChoice(first.choice,second.choice);
+}

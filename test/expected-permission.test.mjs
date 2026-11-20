@@ -48,9 +48,9 @@ test('composer captures visible access before async identity work and keeps reje
  const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
  const source=app.slice(app.indexOf('async function submitPrompt('),app.indexOf('async function saveIdea('));
  const draft={id:'draft',text:'Verify this folder',provider:'codex',turnId:null};
- const nodes={prompt:{value:draft.text},permission:{value:'read'}};
+ const nodes={composer:{dataset:{project:'project',provider:'codex',draft:JSON.stringify(draft)}},prompt:{value:draft.text},permission:{value:'read'}};
  let payload,hashed,cleared=false;
- const context=vm.createContext({state:{chats:[{id:'project',provider:'codex',permission:'edit',status:'ready'}]},selected:'project',sending:false,switchingProvider:new Set(),$:id=>nodes[id],drafts:{read:()=>draft,clearIfUnchanged:()=>{cleared=true;}},replyRequestId:async(d,p)=>{hashed=p;nodes.permission.value='edit';return 'receipt';},render(){},api:async(route,p)=>{payload=p;throw Error('Project access changed');},toast(){},viewedTurns:new Map(),autoAdvance:false});
+ const context=vm.createContext({state:{chats:[{id:'project',provider:'codex',permission:'edit',status:'ready'}]},selected:'project',sending:false,switchingProvider:new Set(),currentRenderedDraft:()=>({...draft}),$:id=>nodes[id],drafts:{read:()=>draft,clearIfUnchanged:()=>{cleared=true;}},replyRequestId:async(d,p)=>{hashed=p;nodes.permission.value='edit';return 'receipt';},render(){},api:async(route,p)=>{payload=p;throw Error('Project access changed');},toast(){},viewedTurns:new Map(),autoAdvance:false});
  vm.runInContext(source,context);await context.submitPrompt({preventDefault(){}});
  assert.equal(payload.expectedPermission,'read');assert.equal(payload.requestId,'receipt');assert.equal(Object.hasOwn(hashed,'expectedPermission'),false);assert.equal(cleared,false);assert.equal(draft.text,'Verify this folder');
 });
