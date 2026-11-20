@@ -251,11 +251,12 @@ function chatView(c){
  ${busy&&c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0],c)}</div>`:''}</div></section>
  <div class="composer-wrap">${editOverlapNotice(c)}
  <form id="composer" aria-label="Reply" data-project="${esc(c.id)}" data-draft="${esc(JSON.stringify(draft))}" data-result="${esc(report?.id||'')}" data-provider="${esc(provider)}">
- <div class="reply-tools">${c.demo?'<span class="demo-tag">Simulated reply</span>':`<div class="provider-picker" role="group" aria-label="Reply provider">${['codex','claude'].map(p=>`<button id="reply-${p}" type="button" data-provider="${p}" aria-pressed="${provider===p}" ${busy||changing||sending?'disabled':''}>${name(p)}</button>`).join('')}</div>`}
- <select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select></div>
  <div id="reply-connection-notice" ${connection?'':'hidden'}>${connection}</div><div id="reply-target" class="composer-note">${replyTarget(c,draft)}</div>
- <label class="sr-only" for="prompt">Reply to ${recipient}</label><textarea id="prompt" placeholder="Write a reply…" ${busy||sending?'disabled':''}>${esc(draft.text)}</textarea>
- <div class="composer-footer">${busy?`<span role="status">${esc(c.activity||(c.status==='stopping'?'Stopping…':'Working…'))}</span><button type="button" class="secondary-button" data-action="stop" ${c.status==='stopping'?'disabled':''}>Stop</button>`:`<button class="send-button" type="submit" ${sending||changing||state.workspaceMismatch?'disabled':''}>Send</button>`}</div></form></div>`;
+ <div class="reply-box"><label class="sr-only" for="prompt">Reply to ${recipient}</label><textarea id="prompt" placeholder="Message ${c.demo?'the demo':recipient}…" ${busy||sending?'disabled':''}>${esc(draft.text)}</textarea>
+ <div class="reply-tools">${c.demo?'<span class="demo-tag">Simulated reply</span>':`<div class="provider-picker" role="group" aria-label="Reply provider">${['codex','claude'].map(p=>`<button id="reply-${p}" type="button" data-provider="${p}" aria-pressed="${provider===p}" ${busy||changing||sending?'disabled':''}>${name(p)}</button>`).join('')}</div>`}
+ <select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select>
+ ${busy?`<button type="button" class="secondary-button reply-stop" data-action="stop" ${c.status==='stopping'?'disabled':''}>Stop</button>`:`<button class="send-button" type="submit" aria-label="Send reply" title="Send reply (⌘ Enter)" ${sending||changing||state.workspaceMismatch?'disabled':''}><span aria-hidden="true">↑</span></button>`}</div></div>
+ ${busy?`<div class="reply-status" role="status">${esc(c.activity||(c.status==='stopping'?'Stopping…':'Working…'))}</div>`:''}</form></div>`;
 }
 function savedDecisions(c) {
   return [...(c.confirmedDecisions||[]).map(d=>`<li><span>✓</span>${esc(d)}</li>`),
