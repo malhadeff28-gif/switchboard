@@ -60,8 +60,10 @@ function render(){
  $('search').addEventListener('input',e=>{query=e.target.value;render();});
  $('auto').addEventListener('change',e=>{autoAdvance=e.target.checked;localStorage.setItem('switchboard-auto',String(autoAdvance));toast(autoAdvance?'Sending a prompt will take you to the next ready chat.':'You’ll stay in the chat after sending.');});
  $('prompt')?.addEventListener('input',e=>{
+   const shown=visibleTurn(chat)?.id;
    saveDraft(selected,e.target.value);
-   $('reply-target').innerHTML=replyTarget(chat);
+   if(shown!==visibleTurn(chat)?.id){render();return;}
+   updateReplyContext(chat);
  });
  $('idea-text')?.addEventListener('input',e=>saveDraft('ideas',e.target.value));
  $('composer')?.addEventListener('submit',submitPrompt);
@@ -86,6 +88,31 @@ const viewedTurns=new Map();
 function visibleTurn(c) {
   const id=viewedTurns.get(c.id)??drafts.read(c.id).turnId??c.displayTurn;
   return c.turns?.find(t=>t.id===id) || c.turns?.at(-1);
+}
+function watchedResultToReview(c){
+ const visible=visibleTurn(c);
+ if(c.unseenWatchedTurn){
+  const pending=c.turns?.find(t=>t.id===c.unseenWatchedTurn&&t.origin==='watched');
+  return pending&&pending.id!==visible?.id?pending.id:null;
+ }
+ const draft=drafts.read(c.id);
+ if(!draft.text.trim()||!draft.turnId||visible?.id!==draft.turnId)return null;
+ const anchor=c.turns?.find(t=>t.id===draft.turnId);
+ const active=c.turns?.find(t=>t.id===c.displayTurn&&t.origin==='watched');
+ return active&&anchor&&active.id!==anchor.id&&active.at>anchor.at?active.id:null;
+}
+function watchedResultNotice(c){
+ return watchedResultToReview(c)?'<div class="notice">Your original chat has another result to review. <button type="button" class="text-button" data-action="show-watched-result">Open its result ↗</button></div>':'';
+}
+function updateReplyContext(c){
+ const target=$('reply-target'),notice=$('watched-result-notice');
+ const targetHtml=replyTarget(c),noticeHtml=watchedResultNotice(c);
+ if(target&&target.innerHTML!==targetHtml)target.innerHTML=targetHtml;
+ if(notice){if(notice.innerHTML!==noticeHtml)notice.innerHTML=noticeHtml;notice.hidden=!noticeHtml;}
+}
+function showWatchedResult(c){
+ const id=watchedResultToReview(c);if(!id)return;
+ viewedTurns.set(c.id,id);render();
 }
 function replyProvider(c) { return drafts.read(c.id).provider || c.provider; }
 function replyAnchor(c) {
@@ -152,7 +179,7 @@ function chatView(c){const busy=['running','stopping'].includes(c.status);const 
  <div class="project-meta"><div class="provider-picker"><button data-provider="codex" ${busy||changing||sending?'disabled':''} class="${provider==='codex'?'chosen':''}"><span class="provider-glyph codex">◎</span> Codex</button><button data-provider="claude" ${busy||changing||sending?'disabled':''} class="${provider==='claude'?'chosen':''}"><span class="provider-glyph claude">✳</span> Claude</button></div><button class="usage-shortcut" data-action="usage">${usageLabel(provider)}</button><span class="context-note">${c.sourceId?(c.sessions?.[provider]?'Continue Switchboard session':'Reply starts a separate '+name(provider)+' session'):'Context stays with your project'}</span><select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select></div></div>
  <div id="thread" class="thread">${state.storageError?`<div class="error-card" role="alert">${esc(state.storageError)}</div>`:''}${c.watch?`<div class="watch-status">${c.watch.enabled?`Watching ${name(c.watch.provider)} · ${esc(c.watch.phase)}`:'Watching paused'} ${c.watch.enabled?'<button class="text-button" data-action="pause-watch">Pause</button>':'<button class="text-button" data-action="resume-watch">Resume</button>'}${c.watch.error?`<p>${esc(c.watch.error)}</p>`:''}</div>`:''}${turnStatus(c)}
  ${c.permissionNotice?`<div class="notice">${esc(c.permissionNotice)}</div>`:''}
- ${c.unseenWatchedTurn&&visibleTurn(c)?.id!==c.unseenWatchedTurn?`<div class="notice">Your original chat has another result to review. <button type="button" class="text-button" data-action="show-watched-result">Open its result ↗</button></div>`:''}
+ <div id="watched-result-notice" ${watchedResultToReview(c)?'':'hidden'}>${watchedResultNotice(c)}</div>
  ${turnView(c)}
  ${c.messages.length?`<details class="conversation" ${c.messages.some(m=>!m.imported)?'open':''}><summary>Conversation <span>${c.messages.length} messages${c.messages.every(m=>m.imported)?' · imported excerpt':''}</span></summary>${c.messages.map(m=>`<article class="message ${m.role}"><div class="message-label">${m.role==='user'?'YOU':name(m.provider)}${m.imported?' <span>Imported context</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`).join('')}</details>`:''}
  ${busy?`<section class="working-card"><span class="pulse-dot"></span><strong>${esc(c.activity||'Working on your request')}</strong><button data-action="stop" class="text-button" ${c.status==='stopping'?'disabled':''}>${c.status==='stopping'?'Stopping…':'Stop'}</button>${c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0],c)}</div>`:''}</section>`:''}</div>
@@ -364,7 +391,7 @@ async function followDiscoveredProjects(retryOnly=false){
 function editText(type){const c=state.chats.find(c=>c.id===selected);if(!c)return;const label={decision:'Your decision',goal:'Project goal',requirements:'Pinned requirements'}[type];openModal(type,`<h2>${label}</h2><p class="modal-intro">This stays with the project and travels between agents.</p><form id="memory-form"><label>${label}<textarea name="text" ${type==='requirements'?'maxlength="6000"':'required'}>${type==='decision'?'':esc(c[type])}</textarea></label><button class="primary-button">Save →</button></form>`);$('memory-form').onsubmit=async e=>{e.preventDefault();try{await api(`/api/chats/${c.id}/update`,{[type]:new FormData(e.target).get('text')});$('modal').close();}catch(error){toast(error.message);}};}
 async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
  if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render();return;}
- if(c&&kind==='show-watched-result'){viewedTurns.set(c.id,c.unseenWatchedTurn);render();return;}
+ if(c&&kind==='show-watched-result'){showWatchedResult(c);return;}
  if(c&&kind==='analyze'){await api(`/api/chats/${c.id}/analyze`,{turnId:visibleTurn(c)?.id});return;}
  if(c&&['pause-watch','resume-watch'].includes(kind)){await api(`/api/chats/${c.id}/${kind}`,{});return;}
  if(kind==='older-chats'&&nextOffset!==null){
@@ -401,7 +428,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
    const index=Number(b.dataset.choice), value=choiceText(index,option);
    saveDraft(c.id,value,{turnId:t.id,provider:c.provider,choice:{index,label:option.label,tradeoff:option.tradeoff}});
    $('prompt').value=value;
-   $('reply-target').innerHTML=replyTarget(c);
+   updateReplyContext(c);
    $('prompt').focus();
    return;
  }
