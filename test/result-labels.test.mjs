@@ -58,3 +58,14 @@ test('the report replaces its own conversation message and preserves both surrou
  assert.equal(html.match(/Old original output/g)?.length,1);
  assert.doesNotMatch(html,/Full response/);
 });
+test('decision context preserves the recorded request, constraints and saved decisions alongside the options',()=>{
+ const active=turn('context-turn','watched','Which format?');
+ active.request='Choose a format that works offline.';
+ active.priorInstructions=[active.request,'Keep headings intact.'];
+ active.card.options=[{label:'CSV',tradeoff:'Smaller files'}, {label:'JSON',tradeoff:''}];
+ const h=harness({text:''});
+ const html=h.turnView({...chat,turns:[active],goal:'Make the export reusable.',requirements:'No external services.',confirmedDecisions:['Keep <original> filenames.']});
+ for(const text of ['Choose a format that works offline.','Keep headings intact.','Make the export reusable.','No external services.','Keep &lt;original&gt; filenames.','Smaller files','Tradeoff not stated.'])assert.ok(html.includes(text),text);
+ assert.equal(html.match(/Choose a format that works offline\./g)?.length,1);
+ assert.match(html,/class="decision-context" open/);
+});

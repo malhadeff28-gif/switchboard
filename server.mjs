@@ -94,7 +94,10 @@ function persistChat(chat,next){
   Object.assign(chat,next);
   publish();
 }
-function publicChats(){return state.chats.map(({watch,turns,sendReceipts,lastRequestId,messages,...chat})=>({...chat,managedEditOverlap:managedEditOverlap(chat),messages:messages.map(({requestId,...message})=>message),status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,requirements,...t})=>t)}));}
+function publicChats(){return state.chats.map(({watch,turns,sendReceipts,lastRequestId,messages,...chat})=>({...chat,managedEditOverlap:managedEditOverlap(chat),messages:messages.map(({requestId,...message})=>message),status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,requirements,...t})=>{
+  const priorInstructions=[...new Set([...(requirements||[]),...(earlier||[])].map(note=>note?.text?.trim()).filter(text=>text&&text!==t.request?.trim()))];
+  return priorInstructions.length?{...t,priorInstructions}:t;
+})}));}
 function recordResponse(provider){(state.lastResponses||={})[provider]=Date.now();if(connections[provider])connections[provider].lastResponse=state.lastResponses[provider];}
 function publish(){const data=JSON.stringify({chats:publicChats(),ideas:state.ideas,usage:state.usage,connections,desktop:desktopState(),storageError,workspace});for(const res of clients)if(!res.writableEnded)res.write(`data: ${data}\n\n`);}
 function update({immediate=false,background=false}={}){

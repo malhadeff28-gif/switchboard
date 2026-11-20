@@ -176,6 +176,20 @@ function replyTarget(c,draft=drafts.read(c.id)) {
   if (visibleTurn(c,draft)?.id===id)return '';
   return `Draft is for a different result. <button type="button" class="text-button" data-action="show-draft-result" title="${esc(resultLabel(turn))}">Show draft’s result</button>`;
 }
+function decisionContext(c,t){
+ const request=t.request?.trim(),goal=c.goal?.trim(),requirements=c.requirements?.trim();
+ const saved=c.confirmedDecisions||[];
+ const earlier=(t.priorInstructions||[]).filter(text=>text!==request&&text!==requirements);
+ if(!request&&!goal&&!requirements&&!saved.length&&!earlier.length)return '';
+ return `<details id="context-${esc(t.id)}" class="decision-context" ${t.card.decision?'open':''}>
+  <summary>Decision context</summary>
+  ${goal?`<div><strong>Project goal</strong><p>${esc(goal)}</p></div>`:''}
+  ${requirements?`<div><strong>Pinned requirements</strong><p>${esc(requirements)}</p></div>`:''}
+  ${saved.length?`<div><strong>Saved decisions</strong><ul>${saved.map(text=>`<li>${esc(text)}</li>`).join('')}</ul></div>`:''}
+  ${request?`<details id="request-${esc(t.id)}"><summary>Request this report answers</summary><div class="message-body">${markdown(request,c)}</div></details>`:''}
+  ${earlier.length?`<details id="instructions-${esc(t.id)}"><summary>Earlier instructions (${earlier.length})</summary><ul>${earlier.map(text=>`<li>${esc(text)}</li>`).join('')}</ul></details>`:''}
+ </details>`;
+}
 function turnView(c){
  const t=visibleTurn(c);
  if(!t)return `<section class="handoff-card"><h2>Project context</h2><div class="handoff-summary">${markdown(c.summary,c)}</div></section>`;
@@ -183,7 +197,7 @@ function turnView(c){
  const evidenceId=e=>'e-'+c.id+'-'+e.id;
  const refs=ids=>ids.map(id=>evidence.findIndex(e=>e.id===id)).filter(i=>i>=0).map(i=>`<button type="button" data-evidence="${esc(evidenceId(evidence[i]))}" aria-label="Open evidence ${i+1}">[${i+1}]</button>`).join(' ');
  const prev=c.turns.length>1?`<label class="turn-picker">Result <select id="which-turn">${c.turns.slice().reverse().map(x=>`<option value="${esc(x.id)}" ${x.id===t.id?'selected':''}>${esc(resultLabel(x))}</option>`).join('')}</select></label>`:'';
- const options=card.options.map((o,i)=>`<button class="decision-option" data-choice="${i}" data-choice-project="${esc(c.id)}" data-choice-result="${esc(t.id)}" data-choice-provider="${esc(replyProvider(c))}" data-choice-option="${esc(JSON.stringify([o.label,o.tradeoff]))}" ${['running','stopping'].includes(c.status)?'disabled':''}><strong>${i+1}. ${esc(o.label)}</strong><span>${esc(o.tradeoff)}</span></button>`).join('');
+ const options=card.options.map((o,i)=>`<button class="decision-option" data-choice="${i}" data-choice-project="${esc(c.id)}" data-choice-result="${esc(t.id)}" data-choice-provider="${esc(replyProvider(c))}" data-choice-option="${esc(JSON.stringify([o.label,o.tradeoff]))}" ${['running','stopping'].includes(c.status)?'disabled':''}><strong>${i+1}. ${esc(o.label)}</strong><span>${esc(o.tradeoff||'Tradeoff not stated.')}</span></button>`).join('');
  const unknownDecision=t.analysis==='ready' && card.decision===null && !card.decisionFormatValid;
  const sourceOnly=t.analysis==='source';
  const hasDecision=(t.analysis==='ready'&&!unknownDecision)||(sourceOnly&&card.decision);
@@ -192,9 +206,12 @@ function turnView(c){
  const status=t.analysis==='analyzing'||t.analysis==='queued'?'Preparing the report…':unknownDecision?'Check the original response for a decision.':t.analysisError;
  const retry=t.origin==='watched' && c.watch?.enabled && (t.analysis==='error'||sourceOnly||unknownDecision);
  const decisionInSummary=actualDecision && card.summary.replaceAll('**','').replace(/\s+/g,' ').includes(card.decision.replace(/\s+/g,' ').trim());
+ const context=decisionContext(c,t);
+ const choices=hasDecision&&card.decision&&options?`<div class="decision-options">${options}</div>`:'';
  return `<section class="handoff-card">${prev}<div class="report-meta"><span class="card-kicker">${esc(name(t.provider))} · ${t.origin==='watched'?'Original chat':'Switchboard reply'}${t.phase==='finished'?'':' · '+esc(t.phase)}</span>${actualDecision?`<button type="button" class="text-button decision-jump" data-jump-decision="${esc(t.id)}" data-jump-project="${esc(c.id)}" aria-controls="${esc(decisionId)}">Jump to decision ↓</button>`:''}</div><h2>What happened</h2><div class="handoff-summary">${markdown(card.summary,c)}</div>${card.claims.map(x=>`<p class="claim">${esc(x.text)} ${x.sources.length?refs(x.sources):'<small>Agent reported</small>'}</p>`).join('')}
  ${status||retry?`<div class="analysis-status" role="status">${esc(status)} ${retry?'<button class="text-button" data-action="analyze">Retry analysis</button>':''}</div>`:''}
- ${hasDecision?`<h3 ${actualDecision?`id="${esc(decisionId)}" tabindex="-1" data-decision-result="${esc(t.id)}" data-decision-project="${esc(c.id)}"`:''}>${card.decision?'Decision':'No decision needed'}</h3>${card.decision?`${decisionInSummary?'':`<p>${esc(card.decision)}</p>`}<div class="decision-options">${options}</div>`:''}`:''}
+ ${hasDecision?`<h3 ${actualDecision?`id="${esc(decisionId)}" tabindex="-1" data-decision-result="${esc(t.id)}" data-decision-project="${esc(c.id)}"`:''}>${card.decision?'Decision':'No decision needed'}</h3>${card.decision&&!decisionInSummary?`<p>${esc(card.decision)}</p>`:''}`:''}
+ ${choices&&context?`<div class="decision-body">${choices}${context}</div>`:choices||context}
  ${evidence.length?`<h3>Evidence</h3><div class="source-list">${evidence.map((e,i)=>`<details id="${esc(evidenceId(e))}"><summary>[${i+1}] ${esc(e.label)}</summary><pre>${esc(e.text)}</pre></details>`).join('')}</div>`:''}</section>`;
 }
 function conversation(c,report,status){
