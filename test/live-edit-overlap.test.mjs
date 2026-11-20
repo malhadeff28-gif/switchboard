@@ -26,11 +26,14 @@ test('warning uses existing Stop action only for affected active project',()=>{
  assert.ok(app.indexOf('${editOverlapNotice(c)}')>app.indexOf('<div class="composer-wrap">'));
  for(const c of [{status:'running'},{managedEditOverlap:true,status:'ready'}])assert.equal(context.editOverlapNotice(c),'');
 });
-test('real server publishes reverse-overlap warning after original starts and retains it until managed Stop',{timeout:15000},async()=>{
+for(const enabled of [true,false])test(`real server detects reverse overlap with a ${enabled?'watched':'paused'} original`,{timeout:15000},async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-live-overlap-'));let child;
  try{
-  const data=path.join(dir,'data'),project=path.join(dir,'project'),nested=path.join(project,'nested');await mkdir(data);await mkdir(nested,{recursive:true});const transcript=path.join(dir,'original.jsonl');await writeFile(transcript,'');
+  const data=path.join(dir,'data'),project=path.join(dir,'project'),nested=path.join(project,'nested');await mkdir(data);await mkdir(nested,{recursive:true});const transcript=path.join(dir,'original.jsonl');
+  const event=(type,id='original-turn')=>JSON.stringify({type:'event_msg',payload:{type,turn_id:id,last_agent_message:type==='task_complete'?'Original done':''}})+'\n';
+  await writeFile(transcript,enabled?'':event('task_complete','earlier'));
   const watch=newWatch({provider:'codex',transcriptPath:transcript,sourceSession:'original'});
+  watch.enabled=enabled;
   await writeFile(path.join(data,'workspace.json'),JSON.stringify({ideas:[],chats:[{id:'original',title:'Original',cwd:nested,provider:'codex',permission:'read',status:'ready',messages:[],sessions:{},watch}]}));
   const bin=path.join(dir,'codex-fake');await writeFile(bin,`#!/usr/bin/env node\nif(process.argv.includes('status')){console.log('Logged in using ChatGPT');process.exit(0);}if(process.argv.includes('app-server'))process.exit(1);process.stdin.resume();process.stdin.on('end',()=>{console.log(JSON.stringify({type:'thread.started',thread_id:'managed-session'}));setInterval(()=>{},1000);});\n`,{mode:0o755});
   const port=await availablePort(),base=`http://127.0.0.1:${port}`;child=spawn(process.execPath,['server.mjs'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:String(port),SWITCHBOARD_DATA_DIR:data,SWITCHBOARD_CODEX_BIN:bin,SWITCHBOARD_CLAUDE_BIN:bin},stdio:['ignore','pipe','pipe']});
@@ -39,9 +42,12 @@ test('real server publishes reverse-overlap warning after original starts and re
   const post=async(route,body)=>{const r=await fetch(base+route,{method:'POST',headers:{'Content-Type':'application/json','X-Switchboard-Token':token},body:JSON.stringify(body)});return {status:r.status,...await r.json()};};
   const {chat}=await post('/api/chats',{title:'Managed edit',cwd:project,provider:'codex'});await post(`/api/chats/${chat.id}/update`,{permission:'edit'});assert.equal((await post(`/api/chats/${chat.id}/send`,{text:'Edit fixture',requestId:'edit-one'})).status,202);
   const current=async()=>(await get()).chats.find(c=>c.id===chat.id);assert.equal((await current()).managedEditOverlap,false);
-  const event=type=>JSON.stringify({type:'event_msg',payload:{type,turn_id:'original-turn',last_agent_message:type==='task_complete'?'Original done':''}})+'\n';
   await appendFile(transcript,event('task_started'));
   for(let i=0;i<100&&!(await current()).managedEditOverlap;i++)await delay(30);assert.equal((await current()).managedEditOverlap,true);
+  if(!enabled){
+   const original=JSON.parse(await readFile(path.join(data,'workspace.json'),'utf8')).chats.find(c=>c.id==='original');
+   assert.deepEqual(original.watch,watch);assert.equal(original.turns,undefined);
+  }
   await appendFile(transcript,event('task_complete'));for(let i=0;i<100;i++){if((await get()).chats.find(c=>c.id==='original').watch.phase!=='working')break;await delay(30);}
   assert.equal((await current()).managedEditOverlap,true);assert.equal((await current()).status,'running');await post(`/api/chats/${chat.id}/stop`,{});
   for(let i=0;i<100&&(await current()).status!=='ready';i++)await delay(30);assert.equal((await current()).managedEditOverlap,false);

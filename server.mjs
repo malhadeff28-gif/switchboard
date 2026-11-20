@@ -211,6 +211,25 @@ function managedEditOverlap(chat){
   }
   return !!job.originalOverlap;
 }
+// Probe paused originals only while Switchboard can write to their folder.
+// Use the lifecycle alone, leaving the paused watch and its checkpoint intact.
+function monitorPausedOverlap(chat,job){
+  let checking=false;
+  return setInterval(async()=>{
+    if(checking||job.originalOverlap||job.settled)return;
+    checking=true;
+    try{
+      const paused=overlappingWatches({cwd:job.folder},true).filter(c=>!c.watch.enabled);
+      const phases=await Promise.all(paused.map(c=>pausedLifecycle(c.watch)));
+      if(jobs.get(chat.id)===job&&!job.settled&&phases.includes('working')){
+        job.originalOverlap=true;
+        publish();
+      }
+    }catch{
+      // The project folder may have been removed during this turn.
+    }finally{checking=false;}
+  },750).unref();
+}
 function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission,pausedChecks=new Map()){
   const previous=chat.messages.find(m=>m.requestId===requestId);
   if(previous){
@@ -276,6 +295,7 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission,
     return {nextId:nextAttention(state.chats,chat.id)};
   }
   const job={child,provider,folder,edit:chat.permission==='edit',priorEvidence,stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
+  const pausedOverlapTimer=job.edit?monitorPausedOverlap(chat,job):null;
   let buffer='',stderr='',messages=[],failure='',final='',sessionCandidate='';
   const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';stopJob(chat.id,job);},20*60*1000);
   function event(line){let raw;try{raw=JSON.parse(line);}catch{return;}addEvidence(job.facts,managedEvidence(provider,raw));const e=decodeEvent(provider,raw);
@@ -292,7 +312,7 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission,
   child.stderr.setEncoding('utf8');
   child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){event(buffer.slice(0,index));buffer=buffer.slice(index+1);}if(buffer.length>2000000){failure='Agent output exceeded the event size limit.';stopJob(chat.id,job);}});
   child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-10000);});
-  async function settle(code,error){if(job.settled)return;job.settled=true;clearTimeout(timeout);if(buffer.trim())event(buffer);
+  async function settle(code,error){if(job.settled)return;job.settled=true;clearTimeout(timeout);clearInterval(pausedOverlapTimer);if(buffer.trim())event(buffer);
     if(job.cleanupPromise){
       const cleanup=await job.cleanupPromise;
       if(!cleanup.complete){
