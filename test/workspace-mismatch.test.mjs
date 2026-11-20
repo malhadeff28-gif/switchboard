@@ -33,7 +33,7 @@ test('ordinary same-workspace refresh and reconnect retain prior behavior withou
 });
 test('known mismatch disables Send while preserving editable draft and blocks programmatic composer submission',async()=>{
  const h=harness(),c={id:'same-project',title:'Trail',provider:'codex',status:'ready',permission:'read',messages:[]};
- Object.assign(h.context,{switchingProvider:new Set(),sending:false,autoAdvance:false,name:()=> 'Codex',esc:s=>String(s??''),icon:()=>'',visibleTurn:()=>null,replyProvider:()=> 'codex',replyConnectionNotice:()=>'',usageLabel:()=>'',turnStatus:()=>'',watchedResultToReview:()=>null,watchedResultNotice:()=>'',turnView:()=>'',replyTarget:()=> 'Original result',drafts:{read:()=>h.draft}});
+ Object.assign(h.context,{switchingProvider:new Set(),sending:false,autoAdvance:false,name:()=> 'Codex',esc:s=>String(s??''),icon:()=>'',visibleTurn:()=>null,replyProvider:()=> 'codex',replyConnectionNotice:()=>'',usageLabel:()=>'',turnStatus:()=>'',editOverlapNotice:()=>'',watchedResultToReview:()=>null,watchedResultNotice:()=>'',turnView:()=>'',replyTarget:()=> 'Original result',drafts:{read:()=>h.draft}});
  const chatView=app.slice(app.indexOf('function chatView('),app.indexOf('function savedDecisions('));vm.runInContext(chatView,h.context);
  h.context.state.workspaceReconnecting=true;assert.doesNotMatch(h.context.chatView(c),/class="send-button"[^>]*disabled/);h.context.state.workspaceMismatch=true;
  const html=h.context.chatView(c);assert.match(html,/class="send-button"[^>]*disabled/);assert.match(html,/Saved read-only draft/);assert.doesNotMatch(html,/<textarea id="prompt"[^>]*disabled/);

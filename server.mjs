@@ -1,6 +1,6 @@
 import {revealProjectFile} from './lib/local-files.mjs';
 import {choiceText,sameChoice} from './public/drafts.js';
-import {desktopApplication,findBinary,openProviderDesktop,openProviderTerminal,spawnCli,stopProcess as killGroup} from './lib/providers.mjs';
+import {desktopApplication,findBinary,openProviderDesktop,openProviderTerminal,spawnCli,stopOwnedProcess,stopProcess as killGroup} from './lib/providers.mjs';
 import {createMonitor} from './lib/monitor.mjs';
 import {pausedLifecycle} from './lib/paused-lifecycle.mjs';
 import {makeCard,rawCard,resultPayload} from './lib/handoffs.mjs';
@@ -94,7 +94,7 @@ function persistChat(chat,next){
   Object.assign(chat,next);
   publish();
 }
-function publicChats(){return state.chats.map(({watch,turns,sendReceipts,lastRequestId,messages,...chat})=>({...chat,messages:messages.map(({requestId,...message})=>message),status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,requirements,...t})=>t)}));}
+function publicChats(){return state.chats.map(({watch,turns,sendReceipts,lastRequestId,messages,...chat})=>({...chat,managedEditOverlap:managedEditOverlap(chat),messages:messages.map(({requestId,...message})=>message),status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,requirements,...t})=>t)}));}
 function recordResponse(provider){(state.lastResponses||={})[provider]=Date.now();if(connections[provider])connections[provider].lastResponse=state.lastResponses[provider];}
 function publish(){const data=JSON.stringify({chats:publicChats(),ideas:state.ideas,usage:state.usage,connections,desktop:desktopState(),storageError,workspace});for(const res of clients)if(!res.writableEnded)res.write(`data: ${data}\n\n`);}
 function update({immediate=false,background=false}={}){
@@ -175,9 +175,17 @@ function importSource(source,follow){
   return pending.finally(()=>{if(importJobs.get(source.id)===pending)importJobs.delete(source.id);});
 }
 function stopJob(chatId,job) {
-  killGroup(job.child);
-  const timer=setTimeout(()=>{if(jobs.get(chatId)===job)killGroup(job.child,'SIGKILL');},3000);
-  timer.unref();
+  if(job.cleanupPromise)return job.cleanupPromise;
+  const chat=state.chats.find(c=>c.id===chatId);
+  if(chat){chat.status='stopping';chat.activity='Stopping the agent and its tools';update();}
+  job.cleanupPromise=stopOwnedProcess(job.child,{signal:job.provider==='codex'?'SIGINT':'SIGTERM'}).then(result=>{
+    if(!result.complete && chat){
+      chat.error='Tool cleanup could not be confirmed. This folder remains reserved. '+result.error;
+      update({immediate:true,background:true});
+    }
+    return result;
+  });
+  return job.cleanupPromise;
 }
 function foldersOverlap(first,second){
   const within=(parent,child)=>{
@@ -193,6 +201,15 @@ function overlappingWatches(chat,includePaused=false){
     try{return foldersOverlap(realpathSync(validCwd(c.cwd)),folder);}
     catch{return false;} // A removed folder cannot share writable files.
   });
+}
+function managedEditOverlap(chat){
+  const job=jobs.get(chat.id);
+  if(!job?.edit||job.demo||!['running','stopping'].includes(chat.status))return false;
+  if(!job.originalOverlap){
+    try{job.originalOverlap=overlappingWatches({cwd:job.folder}).some(original=>original.watch.phase==='working');}
+    catch{return false;}
+  }
+  return !!job.originalOverlap;
 }
 function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission,pausedChecks=new Map()){
   const previous=chat.messages.find(m=>m.requestId===requestId);
@@ -258,7 +275,7 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission,
     complete(chat,'',`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and refresh Connections.`);
     return {nextId:nextAttention(state.chats,chat.id)};
   }
-  const job={child,folder,edit:chat.permission==='edit',priorEvidence,stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
+  const job={child,provider,folder,edit:chat.permission==='edit',priorEvidence,stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
   let buffer='',stderr='',messages=[],failure='',final='',sessionCandidate='';
   const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';stopJob(chat.id,job);},20*60*1000);
   function event(line){let raw;try{raw=JSON.parse(line);}catch{return;}addEvidence(job.facts,managedEvidence(provider,raw));const e=decodeEvent(provider,raw);
@@ -273,9 +290,17 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission,
   }
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){event(buffer.slice(0,index));buffer=buffer.slice(index+1);}if(buffer.length>2000000){failure='Agent output exceeded the event size limit.';killGroup(child);}});
+  child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){event(buffer.slice(0,index));buffer=buffer.slice(index+1);}if(buffer.length>2000000){failure='Agent output exceeded the event size limit.';stopJob(chat.id,job);}});
   child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-10000);});
-  function settle(code,error){if(job.settled)return;job.settled=true;clearTimeout(timeout);jobs.delete(chat.id);if(buffer.trim())event(buffer);
+  async function settle(code,error){if(job.settled)return;job.settled=true;clearTimeout(timeout);if(buffer.trim())event(buffer);
+    if(job.cleanupPromise){
+      const cleanup=await job.cleanupPromise;
+      if(!cleanup.complete){
+        chat.status='stopping';chat.error='The agent stopped, but its tool cleanup could not be confirmed. This folder remains reserved. '+cleanup.error;
+        update({immediate:true,background:true});return;
+      }
+    }
+    jobs.delete(chat.id);
     const answer=final || messages.join('\n\n') || chat.liveText;
     if(job.stopped){complete(chat,answer,'You stopped this turn.',job.facts,'interrupted');return;}
     if(error || code!==0 || failure){complete(chat,answer,failure || error?.message || stderr.trim() || `Agent exited with code ${code}.`,job.facts);return;}
@@ -494,5 +519,15 @@ if(state.desktop.enabled)try{await enableDesktop(true);}catch(e){state.desktop.e
 server.listen(port,'127.0.0.1',()=>console.log(`Switchboard is running at http://127.0.0.1:${port}\nWorkspace data: ${storage}`));
 server.on('error',error=>{console.error(error.message);process.exit(1);});
 let closing=false;
-function shutdown(){if(closing)return;closing=true;monitor.close();listener.stop();for(const job of jobs.values()){if(job.child)killGroup(job.child);if(job.timer)clearTimeout(job.timer);}for(const job of authJobs.values())killGroup(job.child);saveBackground();for(const res of clients)res.end();server.close();setTimeout(()=>process.exit(0),1000).unref();}
+async function shutdown(){
+  if(closing)return;closing=true;monitor.close();listener.stop();server.close();
+  for(const res of clients)res.end();
+  const cleanups=[];
+  for(const [chatId,job] of jobs){if(job.child)cleanups.push(stopJob(chatId,job));if(job.timer)clearTimeout(job.timer);}
+  for(const job of authJobs.values())killGroup(job.child);
+  const results=await Promise.all(cleanups);
+  const incomplete=results.some(result=>!result.complete);
+  if(incomplete)console.error('Shutdown could not confirm cleanup of all managed tools.');
+  saveBackground();process.exit(incomplete?1:0);
+}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
