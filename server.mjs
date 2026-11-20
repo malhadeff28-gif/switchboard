@@ -1,3 +1,4 @@
+import {choiceText,sameChoice} from './public/drafts.js';
 import {desktopApplication,findBinary,openProviderDesktop,openProviderTerminal,spawnCli,stopProcess as killGroup} from './lib/providers.mjs';
 import {createMonitor} from './lib/monitor.mjs';
 import {makeCard,rawCard,resultPayload} from './lib/handoffs.mjs';
@@ -162,10 +163,10 @@ function overlappingWatches(chat){
     catch{return false;} // A removed folder cannot share writable files.
   });
 }
-function run(chat,text,requestId,turnId,routeProvider){
+function run(chat,text,requestId,turnId,routeProvider,choice){
   const previous=chat.messages.find(m=>m.requestId===requestId);
   if(previous){
-    if(previous.text!==text || (routeProvider!==undefined && previous.provider!==routeProvider) || (turnId!==undefined && previous.replyTo!==turnId)) {
+    if(previous.text!==text || (routeProvider!==undefined && previous.provider!==routeProvider) || (turnId!==undefined && previous.replyTo!==turnId) || !sameChoice(previous.choice,choice)) {
       throw Object.assign(Error('This send ID belongs to a different reply.'),{status:409});
     }
     return {nextId:nextAttention(state.chats,chat.id),duplicate:true};
@@ -188,14 +189,23 @@ function run(chat,text,requestId,turnId,routeProvider){
   const anchor=turnId===undefined?chat.displayTurn:turnId;
   const turn=anchor == null ? null : chat.turns?.find(t=>t.id===anchor);
   if(anchor != null && !turn)throw new Error('The result this draft answers is unavailable. Clear the draft to start a new reply.');
-  const context=replyContext(chat,provider,turn);
+  let decision;
+  if(choice!==undefined){
+    const option=Number.isInteger(choice?.index) && choice.index>=0 ? turn?.card?.options?.[choice.index] : null;
+    if(turnId==null || !option || typeof turn.card.decision!=='string' ||
+      !['ready','source'].includes(turn.analysis) || choice.label!==option.label || choice.tradeoff!==option.tradeoff ||
+      text!==choiceText(choice.index,option))throw Error('This choice no longer matches its result. Clear the draft and choose again.');
+    decision=`Chose “${option.label}” for “${turn.card.decision}”`;
+  }
+  const project=decision?{...chat,confirmedDecisions:[...(chat.confirmedDecisions||[]),decision]}:chat;
+  const context=replyContext(project,provider,turn);
   const prompt=agentPrompt(context,text,provider,turn);
   const at=Date.now();
   // Save the accepted request before starting a process. If saving fails,
   // leave this project unchanged so the exact same request can be retried.
-  const nextMessages=[...chat.messages,{id:randomUUID(),role:'user',provider,text,at,replyTo:turn?.id??null,requestId}];
+  const nextMessages=[...chat.messages,{id:randomUUID(),role:'user',provider,text,at,replyTo:turn?.id??null,requestId,...(choice!==undefined?{choice}:{})}];
   persistChat(chat,{
-    ...chat,messages:nextMessages,provider,error:null,permissionNotice:undefined,status:'running',
+    ...project,messages:nextMessages,provider,error:null,permissionNotice:undefined,status:'running',
     activity:'Starting your agent',liveText:'',startedAt:at,
     unseenWatchedTurn:chat.unseenWatchedTurn===turn?.id?undefined:chat.unseenWatchedTurn
   });
@@ -380,7 +390,7 @@ const server=http.createServer(async(req,res)=>{
           const text=data.text.trim();
           if(text.length>50000)throw Object.assign(Error('Your reply is over 50,000 characters. Shorten it and try again.'),{status:413});
           if(!chat.demo && chat.permission==='edit')await monitor.refresh(overlappingWatches(chat));
-          send(res,202,run(requiredChat(match[1]),text,string(data.requestId||randomUUID(),100),data.turnId,data.provider));return;
+          send(res,202,run(requiredChat(match[1]),text,string(data.requestId||randomUUID(),100),data.turnId,data.provider,data.choice));return;
         }
         if(action==='stop'){const job=jobs.get(chat.id);if(job?.demo){clearTimeout(job.timer);jobs.delete(chat.id);complete(chat,'','You stopped this demo turn.',[],'interrupted');}else if(job){job.stopped=true;chat.status='stopping';stopJob(chat.id,job);update();}send(res,200,{ok:true});return;}
         if(['running','stopping'].includes(chat.status))throw new Error('Stop this turn before changing the project.');

@@ -1,4 +1,4 @@
-import {draftStore,replyRequestId} from './drafts.js';
+import {draftStore,replyRequestId,choiceText,editDraft} from './drafts.js';
 let state={chats:[],ideas:[],connections:{}}, token='', root='', selected=null, modalType=null, found=[], nextOffset=null, query='', sending=false, renderTimer;
 let discoverySnapshotId=null;
 let drafts;
@@ -25,12 +25,12 @@ async function api(route,data,retry=true) {
   if(!response.ok)throw new Error(json.error||'Something went wrong.');
   return json;
 }
-function saveDraft(id,text) {
+function saveDraft(id,text,choiceTarget) {
   if (!text.trim()) return drafts.write(id,{text:''});
   const old=drafts.read(id);
   const chat=state.chats.find(c=>c.id===id);
-  const target=old.text.trim() ? old : {turnId:chat?visibleTurn(chat)?.id??null:null,provider:chat?.provider};
-  return drafts.write(id,{...target,text,id:target.id||crypto.randomUUID()});
+  const target=choiceTarget || (old.text.trim() ? old : {turnId:chat?visibleTurn(chat)?.id??null:null,provider:chat?.provider});
+  return drafts.write(id,{...editDraft(target,text),...(choiceTarget?{choice:choiceTarget.choice}:{}),id:target.id||crypto.randomUUID()});
 }
 function choose(id){selected=id;localStorage.setItem('switchboard-selected',id||'');render();}
 function markdown(text){return esc(String(text||'').trim()).replace(/```[^\n]*\n([\s\S]*?)```/g,'<pre>$1</pre>').replace(/^#{1,4} (.+)$/gm,'<strong class="message-heading">$1</strong>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a class="message-link" href="$2" target="_blank" rel="noopener noreferrer">$1 ↗</a>').replace(/\n/g,'<br>');}
@@ -155,7 +155,7 @@ async function submitPrompt(e) {
     if(!draft.text.trim())draft=saveDraft(c.id,text);
     const provider=draft.provider||c.provider, turnId=draft.turnId??null;
     if(!draft.id || !draft.provider)draft=drafts.write(c.id,{...draft,id:draft.id||crypto.randomUUID(),provider,turnId});
-    const payload={text,provider,turnId};
+    const payload={text,provider,turnId,...(draft.choice?{choice:draft.choice}:{})};
     // Persist the draft identity before any request. An identical retry after
     // reload generates the same receipt even if no response reached this tab.
     const requestId=await replyRequestId(draft,payload);
@@ -313,8 +313,8 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
    const c=state.chats.find(x=>x.id===selected), t=visibleTurn(c), option=t?.card.options[Number(b.dataset.choice)];
    if (!option || sending) return;
    if (drafts.read(c.id).text.trim()) {toast('Send or clear your current draft before choosing an option.');return;}
-   const value=`Use option ${Number(b.dataset.choice)+1}: ${option.label}. ${option.tradeoff}`;
-   saveDraft(c.id,value);
+   const index=Number(b.dataset.choice), value=choiceText(index,option);
+   saveDraft(c.id,value,{turnId:t.id,provider:c.provider,choice:{index,label:option.label,tradeoff:option.tradeoff}});
    $('prompt').value=value;
    $('reply-target').innerHTML=replyTarget(c);
    $('prompt').focus();

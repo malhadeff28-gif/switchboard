@@ -34,7 +34,8 @@ export function draftStore(storage,workspace) {
     clearIfUnchanged(id,expected) {
       const current=read(id);
       if(current.id===expected.id && current.text===expected.text &&
-        current.provider===expected.provider && current.turnId===expected.turnId) {
+        current.provider===expected.provider && current.turnId===expected.turnId &&
+        sameChoice(current.choice,expected.choice)) {
         write(id,{text:''});
       }
     }
@@ -42,7 +43,23 @@ export function draftStore(storage,workspace) {
 }
 
 export async function replyRequestId(draft,payload) {
-  const encoded=new TextEncoder().encode(JSON.stringify([draft.id,payload.text,payload.provider,payload.turnId]));
+  const encoded=new TextEncoder().encode(JSON.stringify([draft.id,payload.text,payload.provider,payload.turnId,...(payload.choice===undefined?[]:[[payload.choice?.index,payload.choice?.label,payload.choice?.tradeoff]])]));
   const digest=await crypto.subtle.digest('SHA-256',encoded);
   return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+
+export function choiceText(index,option) {
+  return `Use option ${index+1}: ${option.label}. ${option.tradeoff}`.trim();
+}
+
+// An edit permanently detaches the earlier choice, even if later undone.
+export function editDraft(draft,text) {
+  const next={...draft,text};
+  if(text!==draft.text)delete next.choice;
+  return next;
+}
+
+export function sameChoice(first,second) {
+  return first===second || (first!=null && second!=null && first.index===second.index &&
+    first.label===second.label && first.tradeoff===second.tradeoff);
 }

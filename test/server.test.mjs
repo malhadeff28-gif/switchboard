@@ -2,7 +2,7 @@ import {availablePort} from '../scripts/available-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdir,mkdtemp,rename,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,rename,rm,readFile,writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -56,6 +56,38 @@ test('accepted send returns the next chat immediately, rejects duplicate launche
     await rename(file+'.saved',file);
   }
   assert.equal((await post(`/api/chats/${first.id}/send`,{text:'Send after saving works',requestId:'disk'})).status,202);
+  await post(`/api/chats/${first.id}/stop`,{});
+  await stop();
+  const snapshot=JSON.parse(await readFile(file,'utf8'));
+  const seeded=snapshot.chats.find(c=>c.id===first.id);
+  const choice={index:0,label:'Calendar reminder draft',tradeoff:'Local only'};
+  seeded.turns=[{id:'choice-result',provider:'codex',analysis:'source',card:{decision:'Choose a direction',options:[choice]}},{id:'new-result',provider:'claude',analysis:'ready',card:{decision:null,options:[]}}];
+  seeded.displayTurn='new-result';
+  await writeFile(file,JSON.stringify(snapshot));await start();token=(await (await fetch(url+'/api/bootstrap')).json()).token;
+  const payload={text:'Use option 1: Calendar reminder draft. Local only',provider:'codex',turnId:'choice-result',choice,requestId:'chosen'};
+  const current=async()=> (await (await fetch(url+'/api/bootstrap')).json()).chats.find(c=>c.id===first.id);
+  for(const invalidChoice of [null,{...choice,index:-1},{...choice,label:'Invented'}, {...choice,tradeoff:'Invented'}]){
+    assert.equal((await post(`/api/chats/${first.id}/send`,{...payload,choice:invalidChoice})).status,400);
+    assert.deepEqual((await current()).confirmedDecisions||[],[]);
+  }
+  assert.equal((await post(`/api/chats/${first.id}/send`,{...payload,text:'Edited reply'})).status,400);
+  await rename(file,file+'.saved');await mkdir(file);
+  try{
+    assert.equal((await post(`/api/chats/${first.id}/send`,payload)).status,503);
+    assert.deepEqual((await current()).confirmedDecisions||[],[]);
+    assert.equal((await current()).messages.some(m=>m.text===payload.text),false);
+  }finally{await rm(file,{recursive:true});await rename(file+'.saved',file);}
+  assert.equal((await post(`/api/chats/${first.id}/send`,payload)).status,202);
+  assert.deepEqual((await current()).confirmedDecisions,['Chose “Calendar reminder draft” for “Choose a direction”']);
+  assert.equal((await current()).messages.at(-1).replyTo,'choice-result');
+  assert.equal((await current()).provider,'codex');
+  assert.equal((await post(`/api/chats/${first.id}/send`,payload)).json.duplicate,true);
+  await post(`/api/chats/${first.id}/stop`,{});await stop();await start();token=(await (await fetch(url+'/api/bootstrap')).json()).token;
+  assert.equal((await post(`/api/chats/${first.id}/send`,payload)).json.duplicate,true);
+  assert.deepEqual((await current()).confirmedDecisions,['Chose “Calendar reminder draft” for “Choose a direction”']);
+  assert.equal((await post(`/api/chats/${first.id}/send`,{...payload,choice:undefined})).status,409);
+  assert.equal((await post(`/api/chats/${first.id}/send`,{text:'Custom reply',turnId:'choice-result',requestId:'custom'})).status,202);
+  assert.deepEqual((await current()).confirmedDecisions,['Chose “Calendar reminder draft” for “Choose a direction”']);
   await post('/api/demo/clear',{});bootstrap=await (await fetch(url+'/api/bootstrap')).json();assert.equal(bootstrap.chats.length,0);
  }finally{if(child?.exitCode===null)await stop();await rm(data,{recursive:true,force:true});}
 });
