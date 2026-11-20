@@ -5,7 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {constants} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {findBinary,spawnCli} from '../lib/providers.mjs';
+import {findBinary,spawnCli,desktopApplication} from '../lib/providers.mjs';
 
 test('Unix provider discovery skips nonexecutable PATH files and symlink targets', {skip:process.platform==='win32'},async()=>{
  const tmp=await mkdtemp(path.join(os.tmpdir(),'sb-binary-'));
@@ -62,4 +62,27 @@ test('Unix JS entries require readability while native entries require executabi
  assert.equal(findBinary('codex',{SWITCHBOARD_CODEX_BIN:js},options),js);
  assert.deepEqual(checks,[{p:js,mode:constants.R_OK}]);
  assert.equal(findBinary('codex',{SWITCHBOARD_CODEX_BIN:js},{...options,access(){throw Error('denied');}}),undefined);
+});
+
+test('Mac bundled Codex discovery includes home Applications after overrides, PATH and system apps',()=>{
+ const home='/fictional/adam';
+ const relatives=['ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex','Codex.app/Contents/Resources/codex'];
+ for(const relative of relatives){
+  const user=path.join(home,'Applications',relative),system=path.join('/Applications',relative);
+  const plist=path.join(home,'Applications',relative.split('/')[0],'Contents','Info.plist');
+  const files=new Set([user,plist]),checks=[];
+  const options={platform:'darwin',home,stat:p=>({isFile:()=>files.has(p)}),access:(p,mode)=>checks.push({p,mode})};
+  assert.equal(desktopApplication('codex',options).application,path.join(home,'Applications',relative.split('/')[0]));
+  assert.equal(findBinary('codex',{PATH:''},options),user);
+  assert.deepEqual(checks,[{p:user,mode:constants.X_OK}]);
+  assert.equal(findBinary('codex',{PATH:''},{...options,access(){throw Error('not executable');}}),undefined);
+  assert.equal(findBinary('codex',{PATH:''},{...options,platform:'linux'}),undefined);
+  files.add(system);assert.equal(findBinary('codex',{PATH:''},options),system);
+  const cli='/fictional/bin/codex';files.add(cli);assert.equal(findBinary('codex',{PATH:'/fictional/bin'},options),cli);
+  const override='/fictional/override';files.add(override);
+  assert.equal(findBinary('codex',{PATH:'/fictional/bin',SWITCHBOARD_CODEX_BIN:override},options),override);
+ }
+ // Retain the existing system ChatGPT-before-Codex bundle order.
+ const systemCandidates=relatives.map(relative=>path.join('/Applications',relative));
+ assert.equal(findBinary('codex',{PATH:''},{platform:'darwin',home,stat:p=>({isFile:()=>systemCandidates.includes(p)}),access(){}}),systemCandidates[0]);
 });
