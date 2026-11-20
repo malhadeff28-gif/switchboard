@@ -398,14 +398,14 @@ async function signInAction(provider,mode){
   }
 }
 
-async function discoverProjects(){discoveryBatch={enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0};discoverySearch='';openModal('discover','<h2>Pick up an existing thread.</h2><p class="modal-intro">Looking for recent local Codex and Claude projects…</p><div class="discovery-loading">Reading project history…</div>');try{const response=await api('/api/discover?refresh=1');if(modalType!=='discover'||!$('modal').open)return;found=response.projects;nextOffset=response.nextOffset;discoverySnapshotId=response.snapshotId;renderDiscovery();}catch(error){toast(error.message);}}
+async function discoverProjects(){discoveryBatch={enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0,followedIds:[],hadActiveProject:state.chats.some(c=>c.id===selected)};discoverySearch='';openModal('discover','<h2>Pick up an existing thread.</h2><p class="modal-intro">Looking for recent local Codex and Claude projects…</p><div class="discovery-loading">Reading project history…</div>');try{const response=await api('/api/discover?refresh=1');if(modalType!=='discover'||!$('modal').open)return;found=response.projects;nextOffset=response.nextOffset;discoverySnapshotId=response.snapshotId;renderDiscovery();}catch(error){toast(error.message);}}
 function filteredDiscovery(){return found.filter(p=>(p.title+' '+p.cwd).toLowerCase().includes(discoverySearch.toLowerCase()));}
 function renderDiscovery(focusSource=null){
  const dialog=$('modal'),list=$('discovery-list');
  const scroll=focusSource?{dialogTop:dialog.scrollTop,dialogLeft:dialog.scrollLeft,listTop:list?.scrollTop,listLeft:list?.scrollLeft}:null;
  const batch=discoveryBatch;
  const status=[batch.followed?`${batch.followed} followed`:'',batch.skipped?`${batch.skipped} already in workspace`:'',batch.errors.size?`${batch.errors.size} failed`:''].filter(Boolean).join(' · ');
- openModal('discover',`<h2>Pick up an existing thread.</h2><p class="modal-intro">Select a chat to follow. Switchboard uses that provider on your account to summarize its completed turns with tools disabled. Replies here start a separate provider session in the same folder.</p><button class="secondary-button" data-action="finder-multiple" ${batch.busy?'disabled':''}>${batch.enabled?'Use single-chat mode':'Follow several chats'}</button>${batch.enabled?`<p class="form-hint">Choose new chats, then follow your selection. Existing projects keep their current watch settings.</p><button class="primary-button" data-action="finder-follow" ${batch.busy||!batch.selected.size?'disabled':''}>${batch.busy?'Following…':`Follow selected (${batch.selected.size})`}</button> ${batch.errors.size?`<button class="secondary-button" data-action="finder-retry" ${batch.busy?'disabled':''}>Retry failed (${batch.errors.size})</button>`:''} <button class="text-button" data-close ${batch.busy?'disabled':''}>Done</button>`:''}${status?`<p role="status">${esc(status)}</p>`:''}<input id="discover-search" class="discover-search" aria-label="Search discovered projects" placeholder="Find a project or chat" value="${esc(discoverySearch)}"><div class="discovery-list" id="discovery-list">${discoveryRows(filteredDiscovery())}</div>${nextOffset!==null?'<button class="secondary-button" id="discover-older" data-action="older-chats">'+(discoverySearch.trim()?'Search older chats':'Show older chats')+'</button>':''}<p class="fine-print">Following Claude adds completion hooks to your Claude settings. Reopen an existing Claude session if it asks to reload hooks. You can pause watching from the project.</p>`);
+ openModal('discover',`<h2>Pick up an existing thread.</h2><p class="modal-intro">Select a chat to follow. Switchboard uses that provider on your account to summarize its completed turns with tools disabled. Replies here start a separate provider session in the same folder.</p><button class="secondary-button" data-action="finder-multiple" ${batch.busy?'disabled':''}>${batch.enabled?'Use single-chat mode':'Follow several chats'}</button>${batch.enabled?`<p class="form-hint">Choose new chats, then follow your selection. Existing projects keep their current watch settings.</p><button class="primary-button" data-action="finder-follow" ${batch.busy||!batch.selected.size?'disabled':''}>${batch.busy?'Following…':`Follow selected (${batch.selected.size})`}</button> ${batch.errors.size?`<button class="secondary-button" data-action="finder-retry" ${batch.busy?'disabled':''}>Retry failed (${batch.errors.size})</button>`:''} <button class="text-button" data-action="finder-done" ${batch.busy?'disabled':''}>Done</button>`:''}${status?`<p role="status">${esc(status)}</p>`:''}<input id="discover-search" class="discover-search" aria-label="Search discovered projects" placeholder="Find a project or chat" value="${esc(discoverySearch)}"><div class="discovery-list" id="discovery-list">${discoveryRows(filteredDiscovery())}</div>${nextOffset!==null?'<button class="secondary-button" id="discover-older" data-action="older-chats">'+(discoverySearch.trim()?'Search older chats':'Show older chats')+'</button>':''}<p class="fine-print">Following Claude adds completion hooks to your Claude settings. Reopen an existing Claude session if it asks to reload hooks. You can pause watching from the project.</p>`);
  $('discover-search').oninput=e=>{discoverySearch=e.target.value;$('discovery-list').innerHTML=discoveryRows(filteredDiscovery());const older=$('discover-older');if(older)older.textContent=discoverySearch.trim()?'Search older chats':'Show older chats';};
  if(scroll){
   const button=[...dialog.querySelectorAll('[data-finder-select]')].find(b=>b.dataset.finderSelect===focusSource);
@@ -455,9 +455,19 @@ async function followDiscoveredProjects(retryOnly=false){
     const {chat}=await api('/api/import',{id,watch:true});
     if(!state.chats.some(c=>c.id===chat.id||c.sourceId===id))state.chats.push(chat);
     batch.selected.delete(id);batch.errors.delete(id);batch.followed++;
+    const followedIds=batch.followedIds||=[];if(!followedIds.includes(chat.id))followedIds.push(chat.id);
    }catch(error){batch.errors.set(id,error.message);}
   }
  }finally{batch.busy=false;if(discoveryBatch===batch&&modalType==='discover'&&$('modal').open)renderDiscovery();}
+}
+function finishDiscoveredProjects(){
+ const batch=discoveryBatch;
+ if(batch.busy||modalType!=='discover')return;
+ const preserve=batch.hadActiveProject||state.chats.some(c=>c.id===selected);
+ const followed=(batch.followedIds||[]).map(id=>state.chats.find(c=>c.id===id)).filter(Boolean);
+ const target=followed.find(c=>c.status==='ready')||followed[0];
+ $('modal').close();
+ if(!preserve&&target)choose(target.id);
 }
 function editText(type){const c=state.chats.find(c=>c.id===selected);if(!c)return;const label={decision:'Your decision',goal:'Project goal',requirements:'Pinned requirements'}[type];openModal(type,`<h2>${label}</h2><p class="modal-intro">This stays with the project and travels between agents.</p><form id="memory-form"><label>${label}<textarea name="text" ${type==='requirements'?'maxlength="6000"':'required'}>${type==='decision'?'':esc(c[type])}</textarea></label><button class="primary-button">Save →</button></form>`);$('memory-form').onsubmit=async e=>{e.preventDefault();try{await api(`/api/chats/${c.id}/update`,{[type]:new FormData(e.target).get('text')});$('modal').close();}catch(error){toast(error.message);}};}
 async function action(kind){if(kind==='reload-workspace'){location.reload();return;}const c=state.chats.find(c=>c.id===selected);try{
@@ -476,6 +486,7 @@ async function action(kind){if(kind==='reload-workspace'){location.reload();retu
    return;
  }
  if(kind==='finder-multiple'){if(discoveryBatch.busy)return;discoveryBatch.enabled=!discoveryBatch.enabled;renderDiscovery();return;}
+ if(kind==='finder-done')return finishDiscoveredProjects();
  if(kind==='finder-follow')return followDiscoveredProjects();
  if(kind==='finder-retry')return followDiscoveredProjects(true);
  if(kind==='usage')return usage();if(kind==='new')return newProject();if(kind==='discover')return discoverProjects();if(kind==='connections')return connections();

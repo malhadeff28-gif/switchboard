@@ -7,7 +7,7 @@ const finder=app.slice(app.indexOf('function filteredDiscovery('),app.indexOf('f
 const source=id=>({id,provider:'codex',title:id,cwd:'/tmp/'+id,summary:'Completed result'});
 function harness(){
  const calls=[],chosen=[],fail=new Set(),rendered=[],nodes={'modal':{open:true,querySelectorAll(){return [];},close(){throw Error('Batch must stay open');}},'discover-search':{},'discovery-list':{}};
- const context=vm.createContext({state:{chats:[{id:'paused-project',sourceId:'paused',watch:{enabled:false}}]},found:[source('one'),source('two'),source('paused')],discoverySnapshotId:'snapshot-1',discoverySearch:'',nextOffset:1,modalType:'discover',discoveryBatch:{enabled:true,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0},esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),name:()=> 'Codex',$:id=>nodes[id],openModal:(type,html)=>rendered.push(html),choose:id=>chosen.push(id),toast(){},api:async(route,body)=>{calls.push({route,body});if(fail.has(body.id))throw Error('<bad folder>');return {chat:{id:'project-'+body.id,sourceId:body.id,watch:{enabled:true}}};}});
+ const context=vm.createContext({selected:null,state:{chats:[{id:'paused-project',sourceId:'paused',watch:{enabled:false}}]},found:[source('one'),source('two'),source('paused')],discoverySnapshotId:'snapshot-1',discoverySearch:'',nextOffset:1,modalType:'discover',discoveryBatch:{enabled:true,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0},esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),name:()=> 'Codex',$:id=>nodes[id],openModal:(type,html)=>rendered.push(html),choose:id=>chosen.push(id),toast(){},api:async(route,body)=>{calls.push({route,body});if(fail.has(body.id))throw Error('<bad folder>');return {chat:{id:'project-'+body.id,sourceId:body.id,watch:{enabled:true}}};}});
  vm.runInContext(finder,context);
  return {context,calls,chosen,fail,rendered,nodes};
 }
@@ -69,4 +69,38 @@ test('older-page focus prefers an actionable matching row, then older action, th
  h.nodes['discover-older']={focus:()=>focused.push('older')};h.nodes['discover-search'].focus=()=>focused.push('search');
  c.focusDiscoveryNext();row=null;c.focusDiscoveryNext();delete h.nodes['discover-older'];c.focusDiscoveryNext();
  assert.deepEqual(focused,['match','older','search']);
+});
+
+test('explicit batch Done opens first newly followed ready project in follow order',async()=>{
+ const h=harness(),c=h.context;let closed=0;h.nodes.modal.close=()=>closed++;
+ c.state.chats.push({id:'unrelated',status:'ready'});
+ c.found.push(source('three'));
+ c.toggleDiscoveredProject('one');c.toggleDiscoveredProject('two');c.toggleDiscoveredProject('three');
+ await c.followDiscoveredProjects();assert.deepEqual(h.chosen,[]);
+ c.state.chats.find(x=>x.sourceId==='one').status='watching';c.state.chats.find(x=>x.sourceId==='two').status='ready';c.state.chats.find(x=>x.sourceId==='three').status='ready';
+ assert.match(h.rendered.at(-1),/data-action="finder-done"/);
+ c.finishDiscoveredProjects();assert.equal(closed,1);assert.deepEqual(h.chosen,['project-two']);
+});
+test('Done falls back only to an accessible newly followed project and preserves active projects',()=>{
+ for(const kind of ['working','removed','active','initial-active','busy','empty']){
+  const h=harness(),c=h.context;let closed=0;h.nodes.modal.close=()=>closed++;
+  c.state.chats.push({id:'unrelated',status:'ready'},{id:'first',status:'watching'},{id:'second',status:'running'});
+  c.discoveryBatch.followedIds=kind==='empty'?[]:['first','second'];
+  if(kind==='removed')c.state.chats=c.state.chats.filter(x=>x.id!=='first');
+  if(kind==='active')c.selected='unrelated';
+  if(kind==='initial-active')c.discoveryBatch.hadActiveProject=true;
+  if(kind==='busy')c.discoveryBatch.busy=true;
+  c.finishDiscoveredProjects();
+  assert.deepEqual(h.chosen,kind==='working'?['first']:kind==='removed'?['second']:[]);
+  assert.equal(closed,kind==='busy'?0:1);
+ }
+});
+test('closing batch without explicit Done does not navigate and retry records only successful new projects',async()=>{
+ const h=harness(),c=h.context;
+ c.toggleDiscoveredProject('one');c.toggleDiscoveredProject('two');h.fail.add('one');await c.followDiscoveredProjects();
+ assert.deepEqual([...c.discoveryBatch.followedIds],['project-two']);assert.deepEqual(h.chosen,[]);
+ h.fail.clear();await c.followDiscoveredProjects(true);
+ assert.deepEqual([...c.discoveryBatch.followedIds],['project-two','project-one']);assert.deepEqual(h.chosen,[]);
+ // The ordinary Close button remains separate from the explicit Done action.
+ assert.doesNotMatch(h.rendered.at(-1),/data-close[^>]*>Done/);
 });
