@@ -31,6 +31,15 @@ test('desktop sign-in opens an installed provider app and leaves authentication 
  assert.throws(()=>openProviderDesktop('codex',{detect:()=>null}),/unavailable/);
 });
 
+test('Codex sign-in names the installed Mac app that will open',()=>{
+ const home=path.join(os.tmpdir(),'switchboard home');
+ for(const name of ['Codex','ChatGPT']){
+  const application=path.join(home,'Applications',name+'.app');
+  const options={platform:'darwin',home,stat:file=>({isFile:()=>file===path.join(application,'Contents','Info.plist')})};
+  assert.deepEqual(desktopApplication('codex',options),{name,application});
+ }
+});
+
 test('authorization code reaches the waiting CLI without being saved',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'switchboard-auth-')),bin=path.join(dir,'claude-fake'),data=path.join(dir,'data');
  const fixture='#!/usr/bin/env node\n'+String.raw`
