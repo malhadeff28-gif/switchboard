@@ -2,6 +2,7 @@ import {revealProjectFile} from './lib/local-files.mjs';
 import {choiceText,sameChoice} from './public/drafts.js';
 import {desktopApplication,findBinary,openProviderDesktop,openProviderTerminal,spawnCli,stopProcess as killGroup} from './lib/providers.mjs';
 import {createMonitor} from './lib/monitor.mjs';
+import {pausedLifecycle} from './lib/paused-lifecycle.mjs';
 import {makeCard,rawCard,resultPayload} from './lib/handoffs.mjs';
 import {addEvidence,managedEvidence,note} from './lib/turns.mjs';
 import {lockWorkspace,workspaceIdentity} from './lib/workspace.mjs';
@@ -185,15 +186,15 @@ function foldersOverlap(first,second){
   };
   return within(first,second)||within(second,first);
 }
-function overlappingWatches(chat){
+function overlappingWatches(chat,includePaused=false){
   const folder=realpathSync(validCwd(chat.cwd));
   return state.chats.filter(c=>{
-    if(!c.watch?.enabled)return false;
+    if(!c.watch || (!includePaused && !c.watch.enabled))return false;
     try{return foldersOverlap(realpathSync(validCwd(c.cwd)),folder);}
     catch{return false;} // A removed folder cannot share writable files.
   });
 }
-function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission){
+function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission,pausedChecks=new Map()){
   const previous=chat.messages.find(m=>m.requestId===requestId);
   if(previous){
     if(previous.text!==text || (routeProvider!==undefined && previous.provider!==routeProvider) || (turnId!==undefined && previous.replyTo!==turnId) || !sameChoice(previous.choice,choice)) {
@@ -207,6 +208,12 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission)
     if(expectedPermission!==chat.permission)throw Object.assign(Error('Project access changed to '+(chat.permission==='edit'?'File edits':'Read only')+'. Review the access mode before sending this draft again.'),{status:409});
   }
   if(!chat.demo && chat.permission==='edit'){
+    const paused=overlappingWatches(chat,true).filter(c=>!c.watch.enabled);
+    for(const original of paused){
+      const phase=pausedChecks.get(original.watch);
+      if(phase==='working')throw Object.assign(Error('An original paused chat is working in this folder or an overlapping folder. Wait for it to finish, then retry your reply with file edits.'),{status:409});
+      if(phase!=='ready')throw Object.assign(Error('Could not confirm that an original paused chat has finished in this folder or an overlapping folder. Review the original chat before retrying file edits; read-only replies remain available.'),{status:409});
+    }
     const watched=overlappingWatches(chat);
     if(watched.some(c=>c.watch?.enabled && c.watch.phase==='working')){
       throw Object.assign(new Error('An original watched chat is working in this folder or an overlapping folder. Wait for it to finish, then retry your reply with file edits.'),{status:409});
@@ -453,8 +460,15 @@ const server=http.createServer(async(req,res)=>{
           if(typeof data.text!=='string' || !data.text.trim())throw Error('Write a prompt first.');
           const text=data.text.trim();
           if(text.length>50000)throw Object.assign(Error('Your reply is over 50,000 characters. Shorten it and try again.'),{status:413});
-          if(!chat.demo && chat.permission==='edit')await monitor.refresh(overlappingWatches(chat));
-          send(res,202,run(requiredChat(match[1]),text,string(data.requestId||randomUUID(),100),data.turnId,data.provider,data.choice,data.expectedPermission));return;
+          const pausedChecks=new Map();
+          if(!chat.demo && chat.permission==='edit'){
+            const overlapping=overlappingWatches(chat,true);
+            const watched=overlapping.filter(c=>c.watch.enabled);
+            if(watched.length)await monitor.refresh(watched);
+            // Probe paused originals last so a slower live refresh cannot age this check.
+            await Promise.all(overlapping.filter(c=>!c.watch.enabled).map(async c=>{const watch=c.watch;pausedChecks.set(watch,await pausedLifecycle(watch));}));
+          }
+          send(res,202,run(requiredChat(match[1]),text,string(data.requestId||randomUUID(),100),data.turnId,data.provider,data.choice,data.expectedPermission,pausedChecks));return;
         }
         if(action==='stop'){const job=jobs.get(chat.id);if(job?.demo){clearTimeout(job.timer);jobs.delete(chat.id);complete(chat,'','You stopped this demo turn.',[],'interrupted');}else if(job){job.stopped=true;chat.status='stopping';stopJob(chat.id,job);update();}send(res,200,{ok:true});return;}
         if(['running','stopping'].includes(chat.status))throw new Error('Stop this turn before changing the project.');
