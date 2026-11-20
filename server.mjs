@@ -3,7 +3,7 @@ import {createMonitor} from './lib/monitor.mjs';
 import {makeCard,rawCard,resultPayload} from './lib/handoffs.mjs';
 import {addEvidence,managedEvidence,note} from './lib/turns.mjs';
 import http from 'node:http';
-import {readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync} from 'node:fs';
+import {readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, realpathSync} from 'node:fs';
 import {readFile} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {randomUUID, randomBytes} from 'node:crypto';
@@ -16,6 +16,7 @@ const discoveredById=new Map();
 import {CodexSubmitListener,nextDesktop,openInCodex,openCodexBrainstorm} from './lib/desktop.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
+const {version}=JSON.parse(readFileSync(path.join(root,'package.json'),'utf8'));
 const storage=process.env.SWITCHBOARD_DATA_DIR || path.join(root,'.local');
 mkdirSync(storage,{recursive:true,mode:0o700});
 const stateFile=path.join(storage,'workspace.json');
@@ -57,7 +58,7 @@ listener.on('event',event=>{
   }).catch(error=>{nativeError=error.message;nativeHistory({kind:'error',sourceId:event.id,message:error.message});});
 });
 function save(){clearTimeout(persistenceTimer);const tmp=stateFile+'.tmp';writeFileSync(tmp,JSON.stringify(state,null,2),{mode:0o600});renameSync(tmp,stateFile);}
-function publicChats(){return state.chats.map(({watch,turns,...chat})=>({...chat,status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,...t})=>t)}));}
+function publicChats(){return state.chats.map(({watch,turns,sendReceipts,...chat})=>({...chat,status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,requirements,...t})=>t)}));}
 function recordResponse(provider){(state.lastResponses||={})[provider]=Date.now();if(connections[provider])connections[provider].lastResponse=state.lastResponses[provider];}
 function publish(){const data=JSON.stringify({chats:publicChats(),ideas:state.ideas,usage:state.usage,connections,desktop:desktopState()});for(const res of clients)if(!res.writableEnded)res.write(`data: ${data}\n\n`);}
 function update({immediate=false}={}){publish();if(immediate)save();else{clearTimeout(persistenceTimer);persistenceTimer=setTimeout(save,150);}}
@@ -84,25 +85,35 @@ function validProvider(p){if(!providers.includes(p))throw new Error('Choose Code
 function validCwd(cwd){if(typeof cwd!=='string'||!path.isAbsolute(cwd)||!existsSync(cwd)||!statSync(cwd).isDirectory())throw new Error('Choose an existing project folder using its full path.');return cwd;}
 function string(value,max=2000){if(typeof value!=='string')throw new Error('Expected text.');return value.trim().slice(0,max);}
 function newChat(data){return {id:randomUUID(),title:data.title,goal:data.goal||'',cwd:data.cwd||root,provider:data.provider||'codex',permission:'read',status:'ready',readyAt:Date.now(),priority:0,summary:data.summary||'Set the direction for this project. Your first prompt will start the conversation.',decisions:[],nextAction:'What would you like to work on?',messages:data.messages||[],sessions:{},...data};}
+function stopJob(chatId,job) {
+  killGroup(job.child);
+  const timer=setTimeout(()=>{if(jobs.get(chatId)===job)killGroup(job.child,'SIGKILL');},3000);
+  timer.unref();
+}
 function run(chat,text,requestId,turnId,routeProvider){
-  if(chat.lastRequestId===requestId)return {nextId:nextAttention(state.chats,chat.id),duplicate:true};
+  if(chat.lastRequestId===requestId||chat.sendReceipts?.includes(requestId))return {nextId:nextAttention(state.chats,chat.id),duplicate:true};
   if(['running','stopping'].includes(chat.status))throw Object.assign(new Error('This chat is already working.'),{status:409});
   if(jobs.size>=3)throw Object.assign(new Error('Three chats are already working. Wait for one to finish.'),{status:429});
   const provider=validProvider(routeProvider||chat.provider);
   if(!chat.demo && !connections[provider]?.signedIn)throw new Error(`Sign into ${provider==='codex'?'Codex':'Claude'} in Connections first.`);
-  validCwd(chat.cwd);
-  const anchor=turnId||chat.displayTurn;
-  const turn=anchor ? chat.turns?.find(t=>t.id===anchor) : null;
-  if(anchor && !turn)throw new Error('Open the latest handoff before replying.');
+  const folder=realpathSync(validCwd(chat.cwd));
+  if(!chat.demo && [...jobs.values()].some(job=>job.folder===folder && (job.edit || chat.permission==='edit'))){
+    throw Object.assign(new Error('A Switchboard turn is already using this folder. Wait for it to finish before running turns with file edits.'),{status:409});
+  }
+  const anchor=turnId===undefined?chat.displayTurn:turnId;
+  const turn=anchor == null ? null : chat.turns?.find(t=>t.id===anchor);
+  if(anchor != null && !turn)throw new Error('The result this draft answers is unavailable. Clear the draft to start a new reply.');
   const prompt=agentPrompt(chat,text,provider,turn);
   // Spawn before mutating the project so a synchronous OS error preserves the draft.
   let child;if(!chat.demo)try{child=spawnCli(binaries[provider],cliArgs(provider,chat),{cwd:chat.cwd,env:commandEnv,detached:true,stdio:['pipe','pipe','pipe']});}catch{throw new Error(`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and refresh Connections.`);}
-  chat.messages.push({id:randomUUID(),role:'user',provider,text,at:Date.now()});
-  chat.provider=provider;chat.lastRequestId=requestId;chat.error=null;chat.status='running';chat.activity='Starting your agent';chat.liveText='';chat.startedAt=Date.now();update({immediate:true});
+  chat.messages.push({id:randomUUID(),role:'user',provider,text,at:Date.now(),replyTo:turn?.id??null});
+  if(chat.unseenWatchedTurn===turn?.id)delete chat.unseenWatchedTurn;
+  chat.sendReceipts=[...(chat.sendReceipts||[chat.lastRequestId].filter(Boolean)),requestId].slice(-32);
+  chat.provider=provider;chat.lastRequestId=requestId;chat.error=null;delete chat.permissionNotice;chat.status='running';chat.activity='Starting your agent';chat.liveText='';chat.startedAt=Date.now();update({immediate:true});
   if(chat.demo){const timer=setTimeout(()=>{jobs.delete(chat.id);complete(chat,`Here is a direction we can build on: ${text}\n\nThis is a simulated response so you can try the handoff.\n\n<<<SWITCHBOARD_HANDOFF>>>${JSON.stringify({summary:'The demo agent finished. Your project is ready for another decision.',decisions:[],next_action:'Try another prompt or mark this chat caught up.'})}`);},2800);jobs.set(chat.id,{demo:true,timer});return {nextId:nextAttention(state.chats,chat.id)};}
-  const job={child,stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
+  const job={child,folder,edit:chat.permission==='edit',stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
   let buffer='',stderr='',messages=[],failure='',final='',sessionCandidate='';
-  const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';killGroup(child);},20*60*1000);
+  const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';stopJob(chat.id,job);},20*60*1000);
   function event(line){let raw;try{raw=JSON.parse(line);}catch{return;}addEvidence(job.facts,managedEvidence(provider,raw));const e=decodeEvent(provider,raw);
     if(e.session)sessionCandidate=e.session;
     if(e.activity)chat.activity=e.activity;
@@ -128,13 +139,14 @@ function run(chat,text,requestId,turnId,routeProvider){
 }
 function complete(chat,answer,error,facts=[],phase=error?'failed':'finished'){
   const handoff=parseHandoff(answer);
-  const turn={id:randomUUID(),origin:'managed',provider:chat.provider,at:Date.now(),phase,answer:handoff.text,request:chat.messages.findLast(m=>m.role==='user')?.text||'',facts,earlier:[]};
+  const request=chat.messages.findLast(m=>m.role==='user');
+  const turn={id:randomUUID(),origin:'managed',provider:chat.provider,at:Date.now(),phase,answer:handoff.text,request:request?.text||'',replyTo:request?.replyTo??null,facts,earlier:[]};
   addEvidence(facts,note('message','Agent response',turn.answer));
   try{if(error)throw Error();turn.card=makeCard(resultPayload(answer),turn);turn.analysis='ready';}catch{turn.card=rawCard(turn);turn.analysis='raw';}
   (chat.turns||=[]).push(turn);chat.displayTurn=turn.id;
   if(!error && !chat.demo)recordResponse(chat.provider);
   if(handoff.text)chat.messages.push({id:randomUUID(),role:'assistant',provider:chat.provider,text:handoff.text,at:Date.now()});
-  if(answer && !error){chat.summary=handoff.summary;chat.nextAction=handoff.nextAction;chat.decisions=[...new Set([...chat.decisions,...handoff.decisions])].slice(-30);}
+  if(answer && !error){chat.summary=handoff.summary;chat.nextAction=handoff.nextAction;}
   chat.status='ready';chat.readyAt=Date.now();chat.liveText='';chat.activity='';chat.error=error||null;update({immediate:true});}
 async function login(provider){validProvider(provider);if(!binaries[provider])throw new Error(`Install ${provider==='codex'?'Codex CLI':'Claude Code'} first.`);if(authJobs.has(provider))return;
   authErrors.delete(provider);
@@ -157,7 +169,7 @@ const server=http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     const url=new URL(req.url,`http://${host}`), route=url.pathname;
     if(req.method!=='GET' && (req.headers['x-switchboard-token']!==token || (req.headers.origin && ![`http://127.0.0.1:${port}`,`http://localhost:${port}`].includes(req.headers.origin)))){send(res,403,{error:'Refresh Switchboard before continuing.'});return;}
-    if(route==='/api/health' && req.method==='GET'){send(res,200,{app:'switchboard',version:'0.3.0'});return;}
+    if(route==='/api/health' && req.method==='GET'){send(res,200,{app:'switchboard',version});return;}
     if(route==='/api/bootstrap' && req.method==='GET'){send(res,200,{...state,chats:publicChats(),connections,desktop:desktopState(),token,root});return;}
     if(route==='/api/desktop' && req.method==='GET'){await nativeDiscovery(url.searchParams.has('refresh'));send(res,200,{...desktopState(),sources:nativeSources});return;}
     if(route==='/api/discover' && req.method==='GET'){
@@ -219,11 +231,11 @@ const server=http.createServer(async(req,res)=>{
         if(action==='pause-watch'){monitor.pause(chat);send(res,200,{ok:true});return;}
         if(action==='analyze'){const t=chat.turns?.find(t=>t.id===data.turnId);if(!chat.watch?.enabled||t?.origin!=='watched'||t.phase!=='finished')throw new Error('Follow this chat to analyze its completed turn.');if(t.analysis!=='analyzing'){t.analysis='queued';monitor.schedule();update({immediate:true});}send(res,202,{ok:true});return;}
         if(action==='send'){const text=string(data.text,50000);if(!text)throw new Error('Write a prompt first.');send(res,202,run(chat,text,string(data.requestId||randomUUID(),100),data.turnId,data.provider));return;}
-        if(action==='stop'){const job=jobs.get(chat.id);if(job?.demo){clearTimeout(job.timer);jobs.delete(chat.id);complete(chat,'','You stopped this demo turn.');}else if(job){job.stopped=true;chat.status='stopping';killGroup(job.child);const timer=setTimeout(()=>{if(jobs.has(chat.id))killGroup(job.child,'SIGKILL');},3000);timer.unref();update();}send(res,200,{ok:true});return;}
+        if(action==='stop'){const job=jobs.get(chat.id);if(job?.demo){clearTimeout(job.timer);jobs.delete(chat.id);complete(chat,'','You stopped this demo turn.',[],'interrupted');}else if(job){job.stopped=true;chat.status='stopping';stopJob(chat.id,job);update();}send(res,200,{ok:true});return;}
         if(['running','stopping'].includes(chat.status))throw new Error('Stop this turn before changing the project.');
-        if(action==='update'){if(data.provider)chat.provider=validProvider(data.provider);if(data.permission){if(!['read','edit'].includes(data.permission))throw new Error('Unknown access mode.');chat.permission=data.permission;}if(data.decision){chat.decisions.push(string(data.decision));}if(data.goal!==undefined)chat.goal=string(data.goal);if(data.priority!==undefined)chat.priority=data.priority===1?1:0;if(data.status==='ready'){chat.status='ready';chat.readyAt=Date.now();}}
+        if(action==='update'){if(data.provider)chat.provider=validProvider(data.provider);if(data.permission){if(!['read','edit'].includes(data.permission))throw new Error('Unknown access mode.');chat.permission=data.permission;}if(data.decision){(chat.confirmedDecisions||=[]).push(string(data.decision));}if(data.requirements!==undefined)chat.requirements=string(data.requirements,6000);if(data.goal!==undefined)chat.goal=string(data.goal);if(data.priority!==undefined)chat.priority=data.priority===1?1:0;if(data.status==='ready'){chat.status='ready';chat.readyAt=Date.now();}}
         if(action==='reset-session'){delete chat.sessions[validProvider(chat.provider)];chat.error=null;}
-        if(action==='park')chat.status='parked';
+        if(action==='park'){chat.status='parked';delete chat.unseenWatchedTurn;}
         if(action==='delete'){monitor.pause(chat);state.chats=state.chats.filter(c=>c.id!==chat.id);}
         update({immediate:true});send(res,200,{nextId:nextAttention(state.chats,chat.id)});return;
       }
