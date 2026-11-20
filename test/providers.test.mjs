@@ -78,9 +78,10 @@ test('Mac bundled Codex discovery includes home Applications after overrides, PA
   assert.equal(findBinary('codex',{PATH:''},{...options,access(){throw Error('not executable');}}),undefined);
   assert.equal(findBinary('codex',{PATH:''},{...options,platform:'linux'}),undefined);
   files.add(system);assert.equal(findBinary('codex',{PATH:''},options),system);
-  const cli='/fictional/bin/codex';files.add(cli);assert.equal(findBinary('codex',{PATH:'/fictional/bin'},options),cli);
+  const cliDir=path.join('/fictional','bin'),cli=path.join(cliDir,'codex');
+  files.add(cli);assert.equal(findBinary('codex',{PATH:cliDir},options),cli);
   const override='/fictional/override';files.add(override);
-  assert.equal(findBinary('codex',{PATH:'/fictional/bin',SWITCHBOARD_CODEX_BIN:override},options),override);
+  assert.equal(findBinary('codex',{PATH:cliDir,SWITCHBOARD_CODEX_BIN:override},options),override);
  }
  // Retain the existing system ChatGPT-before-Codex bundle order.
  const systemCandidates=relatives.map(relative=>path.join('/Applications',relative));

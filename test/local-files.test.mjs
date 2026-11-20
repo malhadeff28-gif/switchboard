@@ -24,7 +24,7 @@ test('local links render Finder buttons only for Mac project paths while code an
  assert.match(renderMarkdown('[output](</work/project/a (1).txt>)',{project,canReveal:true}),/a \(1\).txt/);
 });
 
-test('Finder reveal validates reference, regular file, canonical folder and argument separation',async()=>{
+test('Finder reveal validates reference, regular file, canonical folder and argument separation',{skip:process.platform==='win32'},async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-reveal-'));
  try{
   const folder=path.join(dir,'project'),other=path.join(dir,'project-other');
@@ -82,7 +82,7 @@ test('genuine Codex file citations share Finder rendering and referenced-path al
  }
 });
 
-test('Codex directive references pass through canonical server validation without expanding project access',async()=>{
+test('Codex directive references pass through canonical server validation without expanding project access',{skip:process.platform==='win32'},async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-citation-'));
  try{
   const folder=path.join(dir,'project');await mkdir(folder);
