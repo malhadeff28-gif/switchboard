@@ -16,8 +16,11 @@ test('website pairing only accepts the HTTPS origin and expires and revokes cred
   const web=hostedAccess(true,{now:()=>time});
   assert.equal(hostedAccess(false).accepts(webOrigin),false);
   assert.equal(web.accepts(webOrigin),true);
-  for(const other of ['http://switchboard.us.com','https://www.switchboard.us.com',webOrigin+'.example',undefined])assert.equal(web.accepts(other),false);
-  const expired=secretFrom(web.link());time=300_000;assert.equal(web.redeem(expired),null);
+  for(const other of [webOrigin.replace('https:','http:'),'https://switchboard.us.com',webOrigin+'.example',undefined])assert.equal(web.accepts(other),false);
+  const link=new URL(web.link());
+  assert.equal(link.origin,webOrigin);
+  assert.equal(link.pathname,'/app/');
+  const expired=secretFrom(link);time=300_000;assert.equal(web.redeem(expired),null);
   const first=secretFrom(web.link()),latest=secretFrom(web.link());
   assert.equal(web.redeem(first),null);
   const session=web.redeem(latest);assert.ok(web.authorized(session));assert.equal(web.redeem(latest),null);

@@ -1,4 +1,3 @@
-const origin='https://switchboard.us.com';
 export const companionUrl='http://127.0.0.1:4317';
 const sessionKey='switchboard-web-session';
 const isKey=key=>typeof key==='string'&&/^[a-f0-9]{64}$/.test(key);
@@ -17,6 +16,7 @@ export function webRequest(route,{session='',data}={}){
 export function clearWebSession(){sessionStorage.removeItem(sessionKey);}
 
 export async function enterWebWorkspace(app){
+  const origin=document.documentElement.dataset.webOrigin;
   if(location.origin!==origin||!isSecureContext||window.top!==window){
     app.textContent='Open the secure Switchboard website directly to connect this Mac.';
     return null;
