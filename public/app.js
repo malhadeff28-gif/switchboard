@@ -125,10 +125,25 @@ function updateReplyContext(c){
  const targetHtml=replyTarget(c),noticeHtml=watchedResultNotice(c);
  if(target&&target.innerHTML!==targetHtml)target.innerHTML=targetHtml;
  if(notice){if(notice.innerHTML!==noticeHtml)notice.innerHTML=noticeHtml;notice.hidden=!noticeHtml;}
+ updateReplyConnection(c);
+}
+function updateReplyConnection(c){
+ const container=$('reply-connection-notice');
+ if(!container)return;
+ const html=replyConnectionNotice(c);
+ if(container.innerHTML!==html)container.innerHTML=html;
+ container.hidden=!html;
 }
 function showWatchedResult(c){
  const id=watchedResultToReview(c);if(!id)return;
  viewedTurns.set(c.id,id);render();
+}
+function replyConnectionNotice(c){
+ if(c.demo||state.workspaceMismatch)return '';
+ const provider=replyProvider(c),connection=state.connections?.[provider];
+ if(!connection||connection.signedIn===true)return '';
+ const message=connection.installed===false?`Install the ${name(provider)} coding CLI in Connections before sending this reply.`:connection.signedIn===false&&!connection.connectionError?`Sign in to ${name(provider)} in Connections before sending this reply.`:'';
+ return message?`<div class="notice" role="status">${esc(message)} <button type="button" class="text-button" data-action="connections">Open Connections ↗</button></div>`:'';
 }
 function replyProvider(c) { return drafts.read(c.id).provider || c.provider; }
 function replyAnchor(c) {
@@ -199,7 +214,7 @@ function chatView(c){const busy=['running','stopping'].includes(c.status);const 
  ${turnView(c)}
  ${c.messages.length?`<details class="conversation" ${c.messages.some(m=>!m.imported)?'open':''}><summary>Conversation <span>${c.messages.length} messages${c.messages.every(m=>m.imported)?' · imported excerpt':''}</span></summary>${c.messages.map(m=>`<article class="message ${m.role}"><div class="message-label">${m.role==='user'?'YOU':name(m.provider)}${m.imported?' <span>Imported context</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`).join('')}</details>`:''}
  ${busy?`<section class="working-card"><span class="pulse-dot"></span><strong>${esc(c.activity||'Working on your request')}</strong><button data-action="stop" class="text-button" ${c.status==='stopping'?'disabled':''}>${c.status==='stopping'?'Stopping…':'Stop'}</button>${c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0],c)}</div>`:''}</section>`:''}</div>
- <div class="composer-wrap">${c.status==='parked'?'<div class="composer-note">This chat is caught up. Send a prompt whenever you want to continue.</div>':''}<form id="composer"><div id="reply-target" class="composer-note">${replyTarget(c)}</div><label class="sr-only" for="prompt">Your prompt for ${name(provider)}</label><textarea id="prompt" placeholder="Give ${name(provider)} a direction…" ${busy||sending?'disabled':''}>${esc(drafts.read(c.id).text)}</textarea><div class="composer-footer"><span>${busy?'This agent is working. Your next chat is ready when you are.':autoAdvance?'Your agent keeps going. You move to the next chat.':'You’ll stay here after sending.'}</span><button class="send-button" type="submit" ${busy||sending||changing||state.workspaceMismatch?'disabled':''}>${busy?'Working…':'Send'} <span>↗</span></button></div></form><div class="below-composer"><button class="text-button" data-action="park" ${busy?'disabled':''}>✓ I’m caught up</button><button class="text-button mobile-memory" data-action="memory">Project memory</button><button class="text-button" data-action="next">Next ready chat →</button></div></div>`;}
+ <div class="composer-wrap">${c.status==='parked'?'<div class="composer-note">This chat is caught up. Send a prompt whenever you want to continue.</div>':''}<div id="reply-connection-notice" ${replyConnectionNotice(c)?'':'hidden'}>${replyConnectionNotice(c)}</div><form id="composer"><div id="reply-target" class="composer-note">${replyTarget(c)}</div><label class="sr-only" for="prompt">Your prompt for ${name(provider)}</label><textarea id="prompt" placeholder="Give ${name(provider)} a direction…" ${busy||sending?'disabled':''}>${esc(drafts.read(c.id).text)}</textarea><div class="composer-footer"><span>${busy?'This agent is working. Your next chat is ready when you are.':autoAdvance?'Your agent keeps going. You move to the next chat.':'You’ll stay here after sending.'}</span><button class="send-button" type="submit" ${busy||sending||changing||state.workspaceMismatch?'disabled':''}>${busy?'Working…':'Send'} <span>↗</span></button></div></form><div class="below-composer"><button class="text-button" data-action="park" ${busy?'disabled':''}>✓ I’m caught up</button><button class="text-button mobile-memory" data-action="memory">Project memory</button><button class="text-button" data-action="next">Next ready chat →</button></div></div>`;}
 function savedDecisions(c) {
   return [...(c.confirmedDecisions||[]).map(d=>`<li><span>✓</span>${esc(d)}</li>`),
     ...(c.decisions||[]).map(d=>`<li>${esc(d)} <small>(unverified)</small></li>`)].join('');
@@ -278,6 +293,7 @@ async function connections(){
   }
 }
 function updateConnectionCards(){
+  const chat=state.chats.find(c=>c.id===selected);if(chat)updateReplyConnection(chat);
   for(const provider of signInSteps.keys()){
     if(state.connections[provider]?.signedIn)signInSteps.delete(provider);
   }
