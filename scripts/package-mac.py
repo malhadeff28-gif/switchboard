@@ -27,7 +27,7 @@ def package(portable, dest, identity):
         node = executables / "node"
         (resources / "runtime" / "node").rename(node)
         node.chmod(0o755)
-        run("lipo", "-verify_arch", "arm64", str(node))
+        run("lipo", str(node), "-verify_arch", "arm64")
         (resources / "Start Switchboard.command").unlink()
         (resources / "START HERE.txt").unlink()
         version = json.loads((resources / "package.json").read_text())["version"]
