@@ -168,40 +168,53 @@ function usageLabel(provider){const u=state.usage?.[provider];if(!u)return 'Usag
 function localDateTime(iso){if(!iso)return '';const d=new Date(iso);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
 function usage(){openModal('usage',`<h2>Usage limits</h2><p class="modal-intro">Record a snapshot from each provider’s usage page. Values are manual, can become stale, and do not update or reset automatically. Check your provider for the current limit.</p><div class="usage-grid">${['codex','claude'].map(p=>{const u=state.usage?.[p];return `<form class="usage-form" data-usage="${p}"><strong>${name(p)}</strong><p>${u?`Last saved ${esc(new Date(u.updatedAt).toLocaleString())}${u.resetAt&&Date.now()>=Date.parse(u.resetAt)?' · reset time passed; update this snapshot':''}`:'No snapshot saved.'}</p><label>Percentage used<input name="used" type="number" min="0" max="100" step="any" required value="${u?esc(u.used):''}" placeholder="e.g. 65"></label><label>Reset time (optional)<input name="resetAt" type="datetime-local" value="${esc(localDateTime(u?.resetAt))}"></label><div class="usage-actions"><button class="primary-button" type="submit">Save snapshot</button>${u?`<button class="text-button" type="button" data-clear-usage="${p}">Clear</button>`:''}</div></form>`;}).join('')}</div><p class="fine-print">These notes are stored on this computer. Switchboard does not enforce provider limits or track usage outside this app.</p>`);
  $('modal').querySelectorAll('.usage-form').forEach(form=>{form.onsubmit=async e=>{e.preventDefault();const data=new FormData(form);try{const result=await api('/api/usage',{provider:form.dataset.usage,used:Number(data.get('used')),resetAt:data.get('resetAt')?new Date(data.get('resetAt')).toISOString():''});state.usage=result.usage;usage();render();toast('Usage snapshot saved.');}catch(error){toast(error.message);}};});}
-function connections(){
+async function connections(){
   openModal('connections',`<h2>Connect an agent</h2>
-    <p class="modal-intro">Open the app, sign in there, then come back and click OK.</p>
+    <p class="modal-intro">Switchboard checks for an existing Codex or Claude Code sign-in on this computer.</p>
     <div id="connections-list">${providersHTML()}</div>`);
+  try {
+    state.connections=await api('/api/connections/refresh',{});
+    updateConnectionCards();
+  } catch(error) {
+    toast(error.message);
+  }
 }
 function updateConnectionCards(){
+  for(const provider of signInSteps.keys()){
+    if(state.connections[provider]?.signedIn)signInSteps.delete(provider);
+  }
+  const activeAuth=document.activeElement?.closest?.('.auth-code-form');
+  if(activeAuth && state.connections[activeAuth.dataset.authCode]?.signingIn)return;
   if(modalType==='connections' && $('connections-list'))$('connections-list').innerHTML=providersHTML();
 }
 function providersHTML(){
   return ['codex','claude'].map(provider=>{
     const c=state.connections[provider]||{};
     const step=signInSteps.get(provider), busy=signInBusy.has(provider);
-    const app=c.desktopApp, label=app||name(provider);
+    const app=c.desktopApp;
     const fallback=c.terminalSignIn
-      ? `<button class="secondary-button" data-terminal-login="${provider}" ${busy?'disabled':''}>Open ${provider==='claude'?'Claude Code':'Codex CLI'} sign-in</button>`
+      ? `<button class="secondary-button" data-terminal-login="${provider}" ${busy?'disabled':''}>${provider==='codex'?'Sign in with ChatGPT':'Sign in to Claude Code'}</button>`
       : `<button class="secondary-button" data-login="${provider}" ${busy||c.signingIn?'disabled':''}>Sign in</button>`;
     const install=provider==='codex'?'https://developers.openai.com/codex/cli':'https://code.claude.com/docs/en/setup';
     const open=app?`<button class="secondary-button" data-desktop-login="${provider}" ${busy?'disabled':''}>Open ${esc(app)} ↗</button>`:'';
     const authCode=/(?:paste|enter|input|provide)\s+(?:the\s+)?(?:authorization\s+)?code/i.test(c.instructions||'');
     let actions='';
-    if(step){
-      const instruction=step==='terminal'?'Finish signing in to the coding CLI.':`Finish signing in to ${label}.`;
+    if(step&&!c.signedIn){
+      const instruction=step==='terminal'
+        ? 'Complete the provider sign-in, then return here and click OK.'
+        : 'If the desktop app asks you to sign in, finish there. Then return here and click OK.';
       const missing=c.installed
-        ? `${provider==='claude'?'Claude Code':'Codex'} still needs a sign-in. Use its sign-in below.`
+        ? (c.connectionError?'Check the CLI error below, then click OK to try again.':'The coding CLI still needs authorization. Use the sign-in button below, then click OK.')
         : 'Install the coding CLI, then click OK again.';
-      actions=`<div class="connection-next"><p role="status">${esc(step==='retry'?missing:instruction+' Then return here.')}</p>
+      actions=`<div class="connection-next"><p role="status">${esc(step==='retry'?missing:instruction)}</p>
         <button class="primary-button" data-confirm-login="${provider}" ${busy?'disabled':''}>${busy?'Checking…':'OK'}</button>
         ${step==='retry'&&c.installed?fallback:''}</div>`;
-    }else if(c.signingIn){
+    }else if(c.signingIn&&!c.signedIn){
       actions=`<pre class="auth-instructions">${esc(c.instructions)}</pre>${authCode?`<form class="auth-code-form" data-auth-code="${provider}">
         <label>Authorization code<input name="code" type="password" autocomplete="off" required maxlength="2048"></label>
         <button class="secondary-button" type="submit">Submit code</button></form>`:''}`;
-    }else{
-      actions=open||(!c.signedIn&&c.installed?fallback:'');
+    }else if(!c.signedIn){
+      actions=open||(c.installed?fallback:'');
     }
     const status=c.signedIn?'Connected':c.connectionError?'CLI needs attention':c.installed?'Sign in to connect':'Coding CLI needed';
     return `<section class="connection-card"><span class="provider-glyph ${provider}">${provider==='codex'?'◎':'✳'}</span>
@@ -332,7 +345,6 @@ events.onmessage=e=>{
   if(selected&&!state.chats.some(c=>c.id===selected))selected=null;
   clearTimeout(renderTimer);
   renderTimer=setTimeout(render,60);
-  const activeAuth=document.activeElement?.closest?.('.auth-code-form');
-  if(modalType==='connections'&&$('connections-list')&&(!activeAuth||!state.connections[activeAuth.dataset.authCode]?.signingIn))$('connections-list').innerHTML=providersHTML();
+  updateConnectionCards();
 };
 events.onerror=()=>toast('Reconnecting to your local workspace…');
