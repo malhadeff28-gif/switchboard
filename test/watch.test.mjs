@@ -5,7 +5,7 @@ import {execFileSync} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {newWatch,pollTranscript,observeHook,note} from '../lib/turns.mjs';
-import {makeCard,rawCard} from '../lib/handoffs.mjs';
+import {makeCard,rawCard,sourceCard} from '../lib/handoffs.mjs';
 import {agentPrompt,attentionStatus} from '../lib/core.mjs';
 import {setClaudeHooks,drainHooks} from '../lib/hooks.mjs';
 import {findBinary} from '../lib/providers.mjs';
@@ -107,6 +107,19 @@ test('evidence links resolve to actual records and a cross-provider reply retain
   for(const s of ['12 tests passed','Must retain nested fields','Use UTF-8','Flattens nested data','Preserves nested data','take the second option'])assert.ok(prompt.includes(s));
   assert.ok(prompt.indexOf('CSV')<prompt.indexOf('JSON'));
   assert.throws(()=>makeCard({summary:'Done',decision:null,options:[{label:'Invented',tradeoff:'None'}]},turn),/options without a decision/);
+});
+test('the original Codex response supplies its own question and choices when analysis is unavailable',()=>{
+  const result=note('tool','Command result','Total: $28');
+  const turn={id:'source',phase:'finished',facts:[result]};
+  const card=sourceCard({...turn,answer:'The weekend plan costs $28.\n\nWould you prefer an **indoor** plan or an **outdoor** plan?'});
+  assert.equal(card.decision,'Would you prefer an indoor plan or an outdoor plan?');
+  assert.deepEqual(card.options,[{label:'indoor',tradeoff:''},{label:'outdoor',tradeoff:''}]);
+  assert.ok(card.evidence.some(item=>item.id===result.id));
+  assert.equal(attentionStatus({status:'ready',displayTurn:turn.id,turns:[{...turn,card,analysis:'source'}]}),'ready');
+  const plain=sourceCard({...turn,answer:'Should the audit flag the largest plans or the unused plans?'});
+  assert.equal(plain.decision,'Should the audit flag the largest plans or the unused plans?');
+  assert.deepEqual(plain.options,[]);
+  assert.equal(sourceCard({...turn,answer:'The planner is ready.'}).decision,null);
 });
 test('only a well-formed explicit no-decision moves a project out of the attention queue',()=>{
   const turn={id:'result',analysis:'ready',facts:[]};
