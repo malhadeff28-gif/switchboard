@@ -120,12 +120,24 @@ function turnView(c){
  const unknownDecision=t.analysis==='ready' && card.decision===null && !card.decisionFormatValid;
  const sourceOnly=t.analysis==='source';
  const hasDecision=(t.analysis==='ready'&&!unknownDecision)||(sourceOnly&&card.decision);
+ const actualDecision=hasDecision && typeof card.decision==='string' && card.decision.trim();
+ const decisionId='decision-'+c.id+'-'+t.id;
  const status=t.analysis==='analyzing'||t.analysis==='queued'?'Preparing the handoff…':unknownDecision?'Review the original response to confirm whether a decision is needed.':sourceOnly?'Showing the original response and recorded evidence.':t.analysisError;
  const retry=t.origin==='watched' && c.watch?.enabled && (t.analysis==='error'||sourceOnly||unknownDecision);
- return `<section class="handoff-card">${prev}<div class="card-kicker">${esc(name(t.provider))} · ${esc(t.phase)} · ${t.origin==='watched'?'Watched chat':'Switchboard turn'}</div><h2>What happened</h2><div class="handoff-summary">${markdown(card.summary,c)}</div>${card.claims.map(x=>`<p class="claim">${esc(x.text)} ${x.sources.length?refs(x.sources):'<small>Agent reported</small>'}</p>`).join('')}
- ${evidence.length?`<h3>Evidence</h3><div class="source-list">${evidence.map((e,i)=>`<details id="${esc(evidenceId(e))}"><summary>[${i+1}] ${esc(e.label)}</summary><pre>${esc(e.text)}</pre></details>`).join('')}</div>`:''}
+ return `<section class="handoff-card">${prev}<div class="card-kicker">${esc(name(t.provider))} · ${esc(t.phase)} · ${t.origin==='watched'?'Watched chat':'Switchboard turn'}</div>${actualDecision?`<button type="button" class="text-button decision-jump" data-jump-decision="${esc(t.id)}" data-jump-project="${esc(c.id)}" aria-controls="${esc(decisionId)}">Jump to decision ↓</button>`:''}<h2>What happened</h2><div class="handoff-summary">${markdown(card.summary,c)}</div>${card.claims.map(x=>`<p class="claim">${esc(x.text)} ${x.sources.length?refs(x.sources):'<small>Agent reported</small>'}</p>`).join('')}
  ${status?`<div class="analysis-status" role="status">${esc(status)} ${retry?'<button class="text-button" data-action="analyze">Retry analysis</button>':''}</div>`:''}
- ${hasDecision?`<h3>${card.decision?(sourceOnly?'Question from the original response':'Decision'):'No decision needed'}</h3>${card.decision?`<p>${esc(card.decision)}</p><div class="decision-options">${options}</div>`:''}`:''}</section>`;
+ ${hasDecision?`<h3 ${actualDecision?`id="${esc(decisionId)}" tabindex="-1" data-decision-result="${esc(t.id)}" data-decision-project="${esc(c.id)}"`:''}>${card.decision?(sourceOnly?'Question from the original response':'Decision'):'No decision needed'}</h3>${card.decision?`<p>${esc(card.decision)}</p><div class="decision-options">${options}</div>`:''}`:''}
+ ${evidence.length?`<h3>Evidence</h3><div class="source-list">${evidence.map((e,i)=>`<details id="${esc(evidenceId(e))}"><summary>[${i+1}] ${esc(e.label)}</summary><pre>${esc(e.text)}</pre></details>`).join('')}</div>`:''}</section>`;
+}
+function jumpToDecision(button){
+ const c=state.chats.find(chat=>chat.id===selected),turn=c&&visibleTurn(c);
+ if(!turn||button.dataset.jumpProject!==c.id||button.dataset.jumpDecision!==turn.id)return;
+ const pane=$('thread');
+ const heading=pane&&[...pane.querySelectorAll('[data-decision-result]')].find(h=>h.dataset.decisionProject===c.id&&h.dataset.decisionResult===turn.id);
+ if(!heading)return;
+ const top=pane.scrollTop+heading.getBoundingClientRect().top-pane.getBoundingClientRect().top-12;
+ pane.scrollTo({top:Math.max(0,top),behavior:'auto'});
+ heading.focus({preventScroll:true});
 }
 function chatView(c){const busy=['running','stopping'].includes(c.status);const provider=replyProvider(c);const changing=switchingProvider.has(c.id);return `<div class="focus-heading"><div class="breadcrumb">${c.demo?'<span class="demo-tag">SIMULATED DEMO</span>':'PROJECT'} <span>/</span> ${busy?'Working in the background':c.status==='parked'?'Caught up':'Your next move'}</div><div class="title-line"><h1>${esc(c.title)}</h1><button class="icon-button ${c.priority?'pinned':''}" data-action="pin" title="Prioritize this project" aria-label="Prioritize this project">☆</button></div>
  <div class="project-meta"><div class="provider-picker"><button data-provider="codex" ${busy||changing||sending?'disabled':''} class="${provider==='codex'?'chosen':''}"><span class="provider-glyph codex">◎</span> Codex</button><button data-provider="claude" ${busy||changing||sending?'disabled':''} class="${provider==='claude'?'chosen':''}"><span class="provider-glyph claude">✳</span> Claude</button></div><button class="usage-shortcut" data-action="usage">${usageLabel(provider)}</button><span class="context-note">${c.sourceId?(c.sessions?.[provider]?'Continue Switchboard session':'Reply starts a separate '+name(provider)+' session'):'Context stays with your project'}</span><select id="permission" aria-label="Agent file access" ${busy?'disabled':''}><option value="read" ${c.permission==='read'?'selected':''}>Read only</option><option value="edit" ${c.permission==='edit'?'selected':''}>File edits</option></select></div></div>
@@ -371,6 +383,7 @@ async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
  }catch(error){toast(error.message);}}
 document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||b.disabled)return;if(b.hasAttribute('data-close')){$('modal').close();return;}if(b.dataset.action){action(b.dataset.action);return;}if(b.dataset.select){choose(b.dataset.select);return;}try{
  if(b.dataset.clearUsage){const result=await api('/api/usage',{provider:b.dataset.clearUsage,clear:true});state.usage=result.usage;usage();render();toast('Usage snapshot cleared.');return;}
+ if(b.dataset.jumpDecision){jumpToDecision(b);return;}
  if(b.dataset.evidence){const item=$(b.dataset.evidence);if(item){item.open=true;item.scrollIntoView({block:'nearest'});}return;}
  if(b.dataset.choice!==undefined){
    const c=state.chats.find(x=>x.id===selected), t=visibleTurn(c), option=t?.card.options[Number(b.dataset.choice)];

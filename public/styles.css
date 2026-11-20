@@ -20,3 +20,4 @@
 .connection-next{width:100%;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .connection-next p{width:100%;margin:0;color:var(--ink)}
 .connection-next .primary-button{min-width:56px;margin:0}
+.decision-jump{display:inline-block;margin:.45rem 0 .2rem;text-decoration:underline;text-underline-offset:3px}.handoff-card h3[tabindex="-1"]:focus{outline:2px solid #557d60;outline-offset:4px}
