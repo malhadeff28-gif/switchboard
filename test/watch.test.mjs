@@ -98,6 +98,27 @@ test('watch keeps the reply provider and catches up all paused turns and same-si
     await rm(dir,{recursive:true,force:true});
   }
 });
+test('an older watched result stays in history after a later Switchboard reply',async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-watch-history-'));
+  const file=path.join(dir,'chat.jsonl');
+  const managed={id:'reply',at:1000,phase:'finished',provider:'codex',origin:'managed',analysis:'ready',card:{decision:null,decisionFormatValid:true}};
+  const chat={id:'project',provider:'codex',status:'ready',displayTurn:managed.id,turns:[managed],messages:[{id:'reply-answer',at:1000,text:'The decision was implemented.'}]};
+  const monitor=createMonitor({state:{chats:[chat]},storage:dir,save(){},publish(){},isConnected:()=>false});
+  try{
+    const start={...lifecycle('task_started','earlier'),timestamp:new Date(500).toISOString()};
+    const finish={...lifecycle('task_complete','earlier',{last_agent_message:'Which plan would you like?'}),timestamp:new Date(700).toISOString()};
+    await writeFile(file,jsonl([start,finish]));
+    await monitor.watch(chat,{provider:'codex',transcriptPath:file,sourceSession:'test'});
+    assert.deepEqual(chat.turns.map(turn=>turn.id),['earlier','reply']);
+    assert.deepEqual(chat.messages.map(message=>message.id),['source-earlier','reply-answer']);
+    assert.equal(chat.displayTurn,'reply');
+    assert.equal(chat.unseenWatchedTurn,undefined);
+    assert.equal(attentionStatus(chat),'parked');
+  }finally{
+    monitor.close();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
 test('evidence links resolve to actual records and a cross-provider reply retains option order',()=>{
   const tool=note('tool','Test result','Exit 0: 12 tests passed'), prior=note('user','Constraint','Must retain nested fields');
   const turn={id:'turn',phase:'finished',provider:'codex',facts:[tool],earlier:[prior]};
