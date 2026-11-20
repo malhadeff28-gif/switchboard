@@ -3,6 +3,8 @@ let state={chats:[],ideas:[],connections:{}}, token='', root='', selected=null, 
 let discoverySnapshotId=null;
 let drafts;
 const switchingProvider=new Set();
+const signInSteps=new Map();
+const signInBusy=new Set();
 let autoAdvance=localStorage.getItem('switchboard-auto')!=='false';
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -166,8 +168,74 @@ function usageLabel(provider){const u=state.usage?.[provider];if(!u)return 'Usag
 function localDateTime(iso){if(!iso)return '';const d=new Date(iso);return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
 function usage(){openModal('usage',`<h2>Usage limits</h2><p class="modal-intro">Record a snapshot from each provider’s usage page. Values are manual, can become stale, and do not update or reset automatically. Check your provider for the current limit.</p><div class="usage-grid">${['codex','claude'].map(p=>{const u=state.usage?.[p];return `<form class="usage-form" data-usage="${p}"><strong>${name(p)}</strong><p>${u?`Last saved ${esc(new Date(u.updatedAt).toLocaleString())}${u.resetAt&&Date.now()>=Date.parse(u.resetAt)?' · reset time passed; update this snapshot':''}`:'No snapshot saved.'}</p><label>Percentage used<input name="used" type="number" min="0" max="100" step="any" required value="${u?esc(u.used):''}" placeholder="e.g. 65"></label><label>Reset time (optional)<input name="resetAt" type="datetime-local" value="${esc(localDateTime(u?.resetAt))}"></label><div class="usage-actions"><button class="primary-button" type="submit">Save snapshot</button>${u?`<button class="text-button" type="button" data-clear-usage="${p}">Clear</button>`:''}</div></form>`;}).join('')}</div><p class="fine-print">These notes are stored on this computer. Switchboard does not enforce provider limits or track usage outside this app.</p>`);
  $('modal').querySelectorAll('.usage-form').forEach(form=>{form.onsubmit=async e=>{e.preventDefault();const data=new FormData(form);try{const result=await api('/api/usage',{provider:form.dataset.usage,used:Number(data.get('used')),resetAt:data.get('resetAt')?new Date(data.get('resetAt')).toISOString():''});state.usage=result.usage;usage();render();toast('Usage snapshot saved.');}catch(error){toast(error.message);}};});}
-function connections(){const html=providersHTML();openModal('connections',`<h2>Two agents. One workspace.</h2><p class="modal-intro">Use your existing Codex and Claude sign-ins. Provider authentication happens in their secure browser flow. A detected sign-in may expire; sign in again if a request reports an authentication error.</p><div id="connections-list">${html}</div><button class="secondary-button" data-action="refresh-connections">Refresh connections ↻</button><p class="fine-print">Install <a class="message-link" href="https://developers.openai.com/codex/cli" target="_blank" rel="noopener noreferrer">Codex CLI</a> or <a class="message-link" href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener noreferrer">Claude Code</a>, then refresh Connections. Each provider requires its own eligible account. Existing desktop chat switching is separate and experimental.</p>`);}
-function providersHTML(){return ['codex','claude'].map(p=>{const c=state.connections[p]||{};return `<section class="connection-card"><span class="provider-glyph ${p}">${p==='codex'?'◎':'✳'}</span><div><strong>${name(p)}</strong><p>${c.signingIn?'Finish signing in':c.connectionError?'Installation needs attention':c.signedIn?c.lastResponse?'Provider responded '+new Date(c.lastResponse).toLocaleString():'Sign-in detected · first response pending':c.installed?'Ready to sign in':'CLI installation needed'}</p></div>${c.signedIn?'<span class="signed-in">✓ Sign-in found</span>':''}<button class="secondary-button" data-login="${p}" ${!c.installed||c.signingIn||c.connectionError?'disabled':''}>${c.signedIn?'Sign in again ↗':'Sign in ↗'}</button>${c.signingIn?`<pre class="auth-instructions">${esc(c.instructions)}</pre>${/(?:paste|enter|input|provide)\s+(?:the\s+)?(?:authorization\s+)?code/i.test(c.instructions||'')?`<form class="auth-code-form" data-auth-code="${p}"><label>Authorization code<input name="code" type="password" autocomplete="off" required maxlength="2048"></label><button class="secondary-button" type="submit">Submit code</button><p>Paste the code from the provider here. It is passed to the provider CLI and not saved by Switchboard.</p></form>`:''}`:''}${c.loginError?`<p class="connection-error" role="alert">${esc(c.loginError)}</p>`:''}${c.connectionError?`<p class="connection-error" role="alert">${esc(c.connectionError)}</p>`:''}${!c.installed?`<p class="install-help">Install ${p==='codex'?'Codex CLI':'Claude Code'}, then refresh Connections.</p>`:''}</section>`;}).join('');}
+function connections(){
+  openModal('connections',`<h2>Connect an agent</h2>
+    <p class="modal-intro">Open the app, sign in there, then come back and click OK.</p>
+    <div id="connections-list">${providersHTML()}</div>`);
+}
+function updateConnectionCards(){
+  if(modalType==='connections' && $('connections-list'))$('connections-list').innerHTML=providersHTML();
+}
+function providersHTML(){
+  return ['codex','claude'].map(provider=>{
+    const c=state.connections[provider]||{};
+    const step=signInSteps.get(provider), busy=signInBusy.has(provider);
+    const app=c.desktopApp, label=app||name(provider);
+    const fallback=c.terminalSignIn
+      ? `<button class="secondary-button" data-terminal-login="${provider}" ${busy?'disabled':''}>Open ${provider==='claude'?'Claude Code':'Codex CLI'} sign-in</button>`
+      : `<button class="secondary-button" data-login="${provider}" ${busy||c.signingIn?'disabled':''}>Sign in</button>`;
+    const install=provider==='codex'?'https://developers.openai.com/codex/cli':'https://code.claude.com/docs/en/setup';
+    const open=app?`<button class="secondary-button" data-desktop-login="${provider}" ${busy?'disabled':''}>Open ${esc(app)} ↗</button>`:'';
+    const authCode=/(?:paste|enter|input|provide)\s+(?:the\s+)?(?:authorization\s+)?code/i.test(c.instructions||'');
+    let actions='';
+    if(step){
+      const instruction=step==='terminal'?'Finish signing in to the coding CLI.':`Finish signing in to ${label}.`;
+      const missing=c.installed
+        ? `${provider==='claude'?'Claude Code':'Codex'} still needs a sign-in. Use its sign-in below.`
+        : 'Install the coding CLI, then click OK again.';
+      actions=`<div class="connection-next"><p role="status">${esc(step==='retry'?missing:instruction+' Then return here.')}</p>
+        <button class="primary-button" data-confirm-login="${provider}" ${busy?'disabled':''}>${busy?'Checking…':'OK'}</button>
+        ${step==='retry'&&c.installed?fallback:''}</div>`;
+    }else if(c.signingIn){
+      actions=`<pre class="auth-instructions">${esc(c.instructions)}</pre>${authCode?`<form class="auth-code-form" data-auth-code="${provider}">
+        <label>Authorization code<input name="code" type="password" autocomplete="off" required maxlength="2048"></label>
+        <button class="secondary-button" type="submit">Submit code</button></form>`:''}`;
+    }else{
+      actions=open||(!c.signedIn&&c.installed?fallback:'');
+    }
+    const status=c.signedIn?'Connected':c.connectionError?'CLI needs attention':c.installed?'Sign in to connect':'Coding CLI needed';
+    return `<section class="connection-card"><span class="provider-glyph ${provider}">${provider==='codex'?'◎':'✳'}</span>
+      <div><strong>${name(provider)}</strong><p>${status}</p></div>
+      ${actions}
+      ${c.connectionError?`<p class="connection-error" role="alert">${esc(c.connectionError)}</p>`:''}
+      ${c.loginError?`<p class="connection-error" role="alert">${esc(c.loginError)}</p>`:''}
+      ${!c.installed?`<a class="message-link install-help" href="${install}" target="_blank" rel="noopener noreferrer">Install the coding CLI ↗</a>`:''}</section>`;
+  }).join('');
+}
+async function signInAction(provider,mode){
+  if(signInBusy.has(provider))return;
+  signInBusy.add(provider);
+  updateConnectionCards();
+  try {
+    if(mode==='confirm'){
+      state.connections=await api('/api/connections/refresh',{});
+      if(state.connections[provider]?.signedIn){
+        signInSteps.delete(provider);
+        render();
+        toast(`${name(provider)} connected.`);
+      }else {
+        signInSteps.set(provider,'retry');
+      }
+    }else{
+      await api('/api/connections/'+mode,{provider});
+      signInSteps.set(provider,mode);
+    }
+  }finally{
+    signInBusy.delete(provider);
+    updateConnectionCards();
+  }
+}
+
 async function discoverProjects(){openModal('discover','<h2>Pick up an existing thread.</h2><p class="modal-intro">Looking for recent local Codex and Claude projects…</p><div class="discovery-loading">Reading project history…</div>');try{const response=await api('/api/discover?refresh=1');if(modalType!=='discover'||!$('modal').open)return;found=response.projects;nextOffset=response.nextOffset;discoverySnapshotId=response.snapshotId;renderDiscovery();}catch(error){toast(error.message);}}
 function renderDiscovery(){openModal('discover',`<h2>Pick up an existing thread.</h2><p class="modal-intro">Select a chat to follow. Switchboard uses that provider on your account to summarize its completed turns with tools disabled. Replies here start a separate provider session in the same folder.</p><input id="discover-search" class="discover-search" aria-label="Search discovered projects" placeholder="Find a project or chat"><div class="discovery-list" id="discovery-list">${discoveryRows(found)}</div>${nextOffset!==null?'<button class="secondary-button" data-action="older-chats">Show older chats</button>':''}<p class="fine-print">Following Claude adds completion hooks to your Claude settings. Reopen an existing Claude session if it asks to reload hooks. You can pause watching from the project.</p>`);$('discover-search').oninput=e=>{$('discovery-list').innerHTML=discoveryRows(found.filter(p=>(p.title+' '+p.cwd).toLowerCase().includes(e.target.value.toLowerCase())));};}
 function discoveryRows(items){return items.length?items.map(p=>`<button class="discovery-row" data-import="${esc(p.id)}"><span class="provider-glyph ${p.provider}">${p.provider==='codex'?'◎':'✳'}</span><span><strong>${esc(p.title)}</strong><small>${name(p.provider)} · ${esc(p.cwd.split('/').slice(-2).join('/'))}</small><p>${esc(p.summary.replace(/\s+/g,' ').slice(0,160))}</p></span><i>＋</i></button>`).join(''):'<p class="context-muted">No recent chats found. Start a new project to connect an agent.</p>';}
@@ -193,7 +261,6 @@ async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
  if(kind==='memory'&&c){openModal('memory',`<h2>Project memory</h2><p class="modal-intro">${esc(c.title)}</p><div class="context-kicker">THE DIRECTION</div><p class="goal">${esc(c.goal||'Set a goal for this project.')}</p><button class="text-button" data-action="goal">Edit goal ↗</button>${pinnedRequirements(c)}<div class="context-kicker memory-label">DECISIONS SO FAR</div><ul class="decision-list">${savedDecisions(c)||'<li>No decisions saved yet.</li>'}</ul><button class="text-button" data-action="decision">＋ Save a decision</button>`);return;}
  if(kind==='ideas'){location.hash='ideas';return choose(null);}if(kind==='next'){choose(next(selected));return;}
  if(['goal','decision','requirements'].includes(kind))return editText(kind);
- if(kind==='refresh-connections'){await api('/api/connections/refresh',{});toast('Connections refreshed.');}
  if(kind==='demo'){const {chat}=await api('/api/demo',{});choose(chat.id);toast('Demo mode: replies are simulated.');}
  if(kind==='clear-demo'){await api('/api/demo/clear',{});choose(null);toast('Demo chats removed.');}
  if(c&&kind==='park'){const result=await api(`/api/chats/${c.id}/park`,{});choose(result.nextId);}
@@ -234,6 +301,9 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
    }
    return;
  }
+ if(b.dataset.desktopLogin){await signInAction(b.dataset.desktopLogin,'desktop');return;}
+ if(b.dataset.terminalLogin){await signInAction(b.dataset.terminalLogin,'terminal');return;}
+ if(b.dataset.confirmLogin){await signInAction(b.dataset.confirmLogin,'confirm');return;}
  if(b.dataset.login){await api('/api/connections/login',{provider:b.dataset.login});return;}
  if(b.dataset.import){b.disabled=true;const {chat}=await api('/api/import',{id:b.dataset.import,watch:true});$('modal').close();if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);choose(chat.id);toast('Following this chat. Its results appear here.');return;}
  if(b.dataset.explore){const {chat}=await api('/api/ideas/start',{id:b.dataset.explore,provider:state.connections.codex?.signedIn?'codex':'claude'});if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);saveDraft(chat.id,`Help me think through this idea: ${chat.goal}\nAsk me a useful question and suggest a small first step.`);choose(chat.id);$('prompt').focus();}
@@ -244,7 +314,11 @@ document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Ente
 $('modal').addEventListener('close',()=>modalType=null);
 $('modal').addEventListener('click',e=>{if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();}});
 const initial=await api('/api/bootstrap');drafts=draftStore(localStorage,initial.workspace);state=initial;token=initial.token;root=initial.root;selected=location.hash==='#ideas'?null:localStorage.getItem('switchboard-selected')||next(null);if(selected&&!state.chats.some(c=>c.id===selected))selected=next(null);render();
-window.addEventListener('hashchange',()=>{if(location.hash==='#ideas')choose(null);});
+if(location.hash==='#connections')connections();
+window.addEventListener('hashchange',()=>{
+  if(location.hash==='#ideas')choose(null);
+  if(location.hash==='#connections'&&!$('modal').open)connections();
+});
 window.addEventListener('storage',e=>{if(drafts.owns(e.key))render();});
 const events=new EventSource('/api/events');
 events.onmessage=e=>{

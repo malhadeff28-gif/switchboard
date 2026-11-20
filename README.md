@@ -19,7 +19,7 @@ On Mac, if Finder does not open the unsigned launcher, open Terminal, type `sh` 
 
 ## First run
 
-1. Open **Connections**. Install [Codex CLI](https://developers.openai.com/codex/cli) or [Claude Code](https://code.claude.com/docs/en/setup) using the provider’s instructions. Click **Refresh connections** and sign in with either provider. The panel distinguishes a local sign-in from the time the provider last returned a successful response.
+1. Open **Connections**. On Mac, choose **Open Codex** or **Open Claude** if the desktop app is installed. Sign in with the provider, then return to Switchboard and click **OK**. Switchboard checks the local coding CLI. If it still needs its own sign-in, use the coding CLI sign-in button. If the CLI is missing, install [Codex CLI](https://developers.openai.com/codex/cli) or [Claude Code](https://code.claude.com/docs/en/setup).
 2. Select **Choose chats**. Pick a conversation from your local Codex or Claude Code history. Repeat to add another. Switchboard reads the selected project’s transcript and shows its latest result while it prepares the handoff.
 3. Open a result. Read **What happened**, expand a numbered source, then compare the options and their tradeoffs. Click an option to put it in your draft or type your own answer. Select the provider and press **Send**. **Send & move on** advances to the next ready project. The result menu lets you revisit earlier turns.
 4. **Pause** on a watched project stops automatic handoff analysis. You can also try simulated projects without connecting an account.

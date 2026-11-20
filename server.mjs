@@ -1,4 +1,4 @@
-import {findBinary,spawnCli,stopProcess as killGroup} from './lib/providers.mjs';
+import {desktopApplication,findBinary,openProviderDesktop,openProviderTerminal,spawnCli,stopProcess as killGroup} from './lib/providers.mjs';
 import {createMonitor} from './lib/monitor.mjs';
 import {makeCard,rawCard,resultPayload} from './lib/handoffs.mjs';
 import {addEvidence,managedEvidence,note} from './lib/turns.mjs';
@@ -107,16 +107,18 @@ for (const chat of state.chats) if (chat.status==='running' || chat.status==='st
 async function checkConnections(){
   await Promise.all(providers.map(provider=>new Promise(resolve=>{
     const binary=binaries[provider]=findBinary(provider,commandEnv);
-    if(!binary){connections[provider]={installed:false,signedIn:false};return resolve();}
+    const desktop=desktopApplication(provider);
+    const defaults={installed:!!binary,desktopApp:desktop?.name,terminalSignIn:process.platform==='darwin'};
+    if(!binary){connections[provider]={...defaults,signedIn:false};return resolve();}
     const connectionError=`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and refresh Connections.`;
-    let child;try{child=spawnCli(binary,provider==='codex'?['login','status']:['auth','status'],{env:commandEnv,stdio:['ignore','pipe','pipe']});}catch{connections[provider]={installed:true,signedIn:false,connectionError};return resolve();}
+    let child;try{child=spawnCli(binary,provider==='codex'?['login','status']:['auth','status'],{env:commandEnv,stdio:['ignore','pipe','pipe']});}catch{connections[provider]={...defaults,signedIn:false,connectionError};return resolve();}
     let stdout='',stderr='',failed=false;const timer=setTimeout(()=>child.kill(),6000);
     child.stdout.on('data',b=>{stdout+=b;});child.stderr.on('data',b=>{stderr+=b;});
-    child.on('error',()=>{failed=true;clearTimeout(timer);connections[provider]={installed:true,signedIn:false,connectionError,loginError:authErrors.get(provider)||''};resolve();});
+    child.on('error',()=>{failed=true;clearTimeout(timer);connections[provider]={...defaults,signedIn:false,connectionError,loginError:authErrors.get(provider)||''};resolve();});
     child.on('close',code=>{if(failed)return;clearTimeout(timer);let signedIn=false,statusKnown=false;
       if(provider==='claude'){try{const status=JSON.parse(stdout || stderr);statusKnown=typeof status.loggedIn==='boolean';signedIn=status.loggedIn===true;}catch{}}
       else{const output=stdout+'\n'+stderr;statusKnown=/logged in/i.test(output);signedIn=code===0 && /logged in/i.test(output) && !/not logged in/i.test(output);}
-      connections[provider]={installed:true,signedIn,lastResponse:state.lastResponses?.[provider],signingIn:authJobs.has(provider),instructions:authJobs.get(provider)?.instructions || '',loginError:authErrors.get(provider)||'',...(!statusKnown?{connectionError}: {})};resolve();});
+      connections[provider]={...defaults,signedIn,lastResponse:state.lastResponses?.[provider],signingIn:authJobs.has(provider),instructions:authJobs.get(provider)?.instructions || '',loginError:authErrors.get(provider)||'',...(!statusKnown?{connectionError}: {})};resolve();});
   })));
   publish();return connections;
 }
@@ -309,6 +311,18 @@ const server=http.createServer(async(req,res)=>{
         update({immediate:true});send(res,200,{usage:state.usage});return;
       }
       if(route==='/api/connections/refresh'){await checkConnections();send(res,200,connections);return;}
+      if(route==='/api/connections/desktop'){
+        await openProviderDesktop(validProvider(data.provider));
+        send(res,200,{ok:true});return;
+      }
+      if(route==='/api/connections/terminal'){
+        const provider=validProvider(data.provider);
+        if(process.platform!=='darwin')throw Error('Terminal sign-in is available on macOS.');
+        const binary=findBinary(provider,commandEnv);
+        if(!binary)throw Error('Install the provider CLI to sign in.');
+        await openProviderTerminal(provider,binary,commandEnv);
+        send(res,200,{ok:true});return;
+      }
       if(route==='/api/connections/login'){await login(data.provider);send(res,200,{ok:true});return;}
       if(route==='/api/connections/code'){
         const provider=validProvider(data.provider),job=authJobs.get(provider);
