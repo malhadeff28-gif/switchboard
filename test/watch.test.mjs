@@ -197,3 +197,46 @@ test('a newly installed CLI is discoverable on refresh without restarting the ap
     await writeFile(target,'fixture',{mode:0o755});assert.equal(findBinary('claude',{PATH:tmp}),target);
   }finally{await rm(tmp,{recursive:true,force:true});}
 });
+
+test('initial watch reconciles its imported excerpt without collapsing later identical turns',async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),'sb-watch-excerpt-'));
+  const file=path.join(dir,'chat.jsonl');
+  const at=Date.parse('2026-11-20T01:00:00Z');
+  const answer='Completed. '+ 'x'.repeat(15000);
+  const snapshot={id:'excerpt',role:'assistant',imported:true,provider:'codex',text:answer.slice(0,14000),at:at+1000};
+  const untouched=[
+    {...snapshot,id:'earlier',at:at-1000},
+    {...snapshot,id:'other-provider',provider:'claude'},
+    {...snapshot,id:'other-session',sourceSession:'other'},
+    {...snapshot,id:'draft',imported:false}
+  ];
+  const chat={id:'project',sourceSession:'test',status:'ready',messages:[...untouched,snapshot]};
+  const options={state:{chats:[chat]},storage:dir,save(){},publish(){},isConnected:()=>false};
+  let monitor=createMonitor(options);
+  const event=(type,id,offset,text)=>({...lifecycle(type,id,text?{last_agent_message:text}:{}),timestamp:new Date(at+offset).toISOString()});
+  try{
+    await writeFile(file,jsonl([event('task_started','first',0),event('task_complete','first',2000,answer)]));
+    await monitor.watch(chat,{provider:'codex',sourceSession:'test',transcriptPath:file});
+    assert.equal(chat.messages.length,5);
+    assert.equal(snapshot.id,'source-first');
+    assert.equal(snapshot.at,at+2000);
+    assert.equal(snapshot.text,answer);
+    assert.deepEqual(chat.messages.filter(m=>untouched.includes(m)),untouched);
+    await appendFile(file,jsonl([event('task_started','second',3000),event('task_complete','second',4000,answer)]));
+    await monitor.poll();
+    assert.equal(chat.messages.filter(m=>m.text===answer).length,2);
+    await appendFile(file,jsonl([event('task_complete','first',5000,'Corrected first answer')]));
+    await monitor.poll();
+    assert.equal(snapshot.text,'Corrected first answer');
+    assert.equal(chat.messages.length,6);
+    // Upgrade an existing saved project with the original duplicate intact.
+    const second=chat.turns.find(t=>t.id==='second');
+    chat.messages.push({...snapshot,id:'legacy-excerpt',text:answer.slice(0,14000),at:at+3500});
+    monitor.close();
+    monitor=createMonitor(options);
+    assert.ok(second);
+    assert.equal(chat.messages.some(m=>m.id==='legacy-excerpt'),false);
+    assert.equal(chat.messages.filter(m=>m.id==='source-second').length,1);
+    assert.equal(chat.messages.length,6);
+  }finally{monitor.close();await rm(dir,{recursive:true,force:true});}
+});

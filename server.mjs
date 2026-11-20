@@ -339,7 +339,7 @@ const server=http.createServer(async(req,res)=>{
       if(route==='/api/import'){
         const source=discoveredById.get(data.id)||(await discovery()).find(p=>p.id===data.id);if(!source)throw new Error('This project is no longer available. Refresh discovery.');
         let chat=state.chats.find(c=>c.sourceId===source.id);
-        if(!chat){chat=newChat({title:source.title,cwd:source.cwd,provider:source.provider,summary:source.summary,messages:source.messages.map(m=>({...m,id:randomUUID(),imported:true})),sourceId:source.id,sourceSession:source.sourceSession,nextAction:'Review the original response.'});state.chats.push(chat);}
+        if(!chat){chat=newChat({title:source.title,cwd:source.cwd,provider:source.provider,summary:source.summary,messages:source.messages.map(m=>({...m,id:randomUUID(),imported:true,sourceSession:source.sourceSession})),sourceId:source.id,sourceSession:source.sourceSession,nextAction:'Review the original response.'});state.chats.push(chat);}
         if(data.watch===true)await monitor.watch(chat,source);
         update({immediate:true});send(res,201,{chat:publicChats().find(c=>c.id===chat.id)});return;
       }
