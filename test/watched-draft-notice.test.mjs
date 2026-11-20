@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 import {sameDraft} from '../public/drafts.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const functions=app.slice(app.indexOf('const viewedTurns='),app.indexOf('function savedDecisions('));
@@ -10,7 +11,7 @@ function harness({text='Choose scenic',turnId='original',provider='claude'}={}){
  const turns=[{id:'original',at:1,origin:'watched'},{id:'second',at:2,origin:'watched'},{id:'latest',at:3,origin:'watched'}].map(t=>({...t,provider:'codex',phase:'finished',card}));
  const chat={id:'routes',title:'Trail Routes',cwd:'/tmp/routes',status:'ready',provider:'codex',permission:'read',displayTurn:'latest',turns,messages:[]};
  const renders=[],nodes={'composer':{dataset:{project:'routes',result:'original',provider:'claude',draft:JSON.stringify(draft)}},'reply-target':{innerHTML:''},'watched-result-notice':{innerHTML:'',hidden:true}};
- const context=vm.createContext({state:{chats:[chat]},selected:chat.id,sameDraft,drafts:{read:()=>draft},name:p=>p==='claude'?'Claude':'Codex',esc:s=>String(s??''),markdown:s=>s,switchingProvider:new Set(),sending:false,autoAdvance:false,icon:()=>'',usageLabel:()=>'',render:()=>renders.push(true),$:id=>nodes[id]});
+ const context=vm.createContext({readableText,state:{chats:[chat]},selected:chat.id,sameDraft,drafts:{read:()=>draft},name:p=>p==='claude'?'Claude':'Codex',esc:s=>String(s??''),markdown:s=>s,switchingProvider:new Set(),sending:false,autoAdvance:false,icon:()=>'',usageLabel:()=>'',render:()=>renders.push(true),$:id=>nodes[id]});
  vm.runInContext(functions,context);return {context,chat,draft,renders,nodes};
 }
 test('restored older draft exposes active original result once and opens exact ID without retargeting reply',()=>{

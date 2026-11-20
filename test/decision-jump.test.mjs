@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const functions=app.slice(app.indexOf('const viewedTurns='),app.indexOf('function chatView('));
 function harness({decision='Use a waitlist?',analysis='ready',status='ready'}={}){
@@ -11,7 +12,7 @@ function harness({decision='Use a waitlist?',analysis='ready',status='ready'}={}
  const evidence={id:'stable-evidence',label:'Verified source',text:'Full evidence'};
  const card={summary:'Full outcome with a link',decision,decisionFormatValid:decision===null,options:[{label:'Waitlist',tradeoff:'Requires tracking'}],claims:[{text:'Full claim',sources:['stable-evidence']}],evidence:[evidence]};
  const chat={id:'project',provider:'codex',status,turns:[{id:'shown',origin:'watched',provider:'codex',at:1,phase:'finished',analysis,card}]};
- const context=vm.createContext({state:{chats:[chat]},selected:'project',drafts:{read:()=>({text:''})},name:()=> 'Codex',esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),markdown:s=>s,$:id=>id==='thread'?pane:null});
+ const context=vm.createContext({readableText,state:{chats:[chat]},selected:'project',drafts:{read:()=>({text:''})},name:()=> 'Codex',esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),markdown:s=>s,$:id=>id==='thread'?pane:null});
  vm.runInContext(functions,context);
  return {context,chat,pane,heading,focused,scrolled};
 }
@@ -22,7 +23,7 @@ test('actual decision has a keyboard jump above outcome and choices before evide
  assert.ok(html.indexOf('Jump to decision')<html.indexOf('What happened'));
  assert.ok(html.indexOf('Full outcome')<html.indexOf('Use a waitlist?'));
  assert.ok(html.indexOf('Full claim')<html.indexOf('Use a waitlist?'));
- assert.ok(html.indexOf('data-choice="0"')<html.indexOf('<h3>Evidence'));
+ assert.ok(html.indexOf('data-choice="0"')<html.indexOf('class="report-evidence"'));
  assert.match(html,/Requires tracking/);assert.match(html,/data-evidence="e-project-stable-evidence"/);assert.match(html,/details id="e-project-stable-evidence"/);assert.match(html,/Full evidence/);
  const busy=harness({status:'running'});assert.match(busy.context.turnView(busy.chat),/data-choice="0"[^>]*disabled/);
 });

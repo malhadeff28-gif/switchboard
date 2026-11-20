@@ -6,7 +6,7 @@ if(!process.argv[2])throw Error('Usage: node scripts/package-website.mjs <destin
 const dest=path.resolve(process.argv[2]);
 const assets=new URL('../public/',import.meta.url);
 await mkdir(dest,{recursive:true});
-for(const file of ['app.js','drafts.js','local-files.js','styles.css','web-session.js']){
+for(const file of ['app.js','drafts.js','local-files.js','readable.js','styles.css','web-session.js']){
   await copyFile(new URL(file,assets),path.join(dest,file));
 }
 const policy="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src http://127.0.0.1:4317; base-uri 'none'; form-action 'none'; object-src 'none'";

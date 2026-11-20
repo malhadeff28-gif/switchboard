@@ -1,3 +1,4 @@
+import {readableText} from './readable.js';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const localLink=/\[([^\]\n]+)\]\((<\/[^>\n]+>|\/[^)\n]+)\)/g;
 const directive=/:codex-file-citation\{([^{}\n]*)\}/g;
@@ -31,7 +32,7 @@ export function renderMarkdown(text,{project,canReveal=false}={}){
   const token=html=>{tokens.push(html);return '\u0000'+(tokens.length-1)+'\u0000';};
   let value=String(raw).replace(directive,(match,body)=>{
    const file=citation(body);const html=file && localButton(file.label,file.path);
-   return html?token(html):match;
+   return token(html||(file?`<span class="file-reference">${esc(file.label)}</span>`:''));
   }).replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+|<\/[^>\n]+>|\/[^)\n]+)\)/g,(match,label,target)=>{
    if(target.startsWith('<'))target=target.slice(1,-1);
    let html;
@@ -41,7 +42,7 @@ export function renderMarkdown(text,{project,canReveal=false}={}){
   });
   return esc(value).replace(/^#{1,4} (.+)$/gm,'<strong class="message-heading">$1</strong>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>').replace(/\u0000(\d+)\u0000/g,(_,i)=>tokens[Number(i)]||'');
  };
- return String(text||'').trim().split(/(```[^\n]*\n[\s\S]*?```|`[^`\n]+`)/g).map(part=>{
+ return readableText(text).trim().split(/(```[^\n]*\n[\s\S]*?```|`[^`\n]+`)/g).map(part=>{
   if(part.startsWith('```'))return '<pre>'+esc(part.replace(/^```[^\n]*\n/,'').replace(/```$/,''))+'</pre>';
   if(part.startsWith('`'))return '<code>'+esc(part.slice(1,-1))+'</code>';
   return inline(part);

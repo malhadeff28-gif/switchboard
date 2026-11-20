@@ -561,7 +561,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'Unknown action.'});return;
     }
-    const assets={'/':'index.html','/app.js':'app.js','/drafts.js':'drafts.js','/local-files.js':'local-files.js','/web-session.js':'web-session.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
+    const assets={'/':'index.html','/app.js':'app.js','/drafts.js':'drafts.js','/local-files.js':'local-files.js','/readable.js':'readable.js','/web-session.js':'web-session.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
     if(req.method==='GET' && assets[route]){const types={'.html':'text/html','.js':'text/javascript','.css':'text/css'};res.writeHead(200,{'Content-Type':types[path.extname(assets[route])],'Cache-Control':'no-cache','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"});res.end(await readFile(path.join(root,'public',assets[route])));return;}
     send(res,404,{error:'Not found.'});
   }catch(error){send(res,error.status||400,{error:error.message});}

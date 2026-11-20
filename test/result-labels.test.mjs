@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const functions=app.slice(app.indexOf('const viewedTurns='),app.indexOf('function chatView('));
 function harness(draft){
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
- const context=vm.createContext({drafts:{read:()=>draft},name:p=>p==='claude'?'Claude':'Codex',esc,markdown:esc});vm.runInContext(functions,context);return context;
+ const context=vm.createContext({readableText,drafts:{read:()=>draft},name:p=>p==='claude'?'Claude':'Codex',esc,markdown:esc});vm.runInContext(functions,context);return context;
 }
 const card=decision=>({decision,summary:'Ready',options:[],claims:[],evidence:[]});
 const turn=(id,origin,decision)=>({id,origin,provider:'codex',at:Date.UTC(2026,10,20,10),phase:'finished',analysis:'ready',card:card(decision)});
@@ -68,4 +69,17 @@ test('decision context preserves the recorded request, constraints and saved dec
  for(const text of ['Choose a format that works offline.','Keep headings intact.','Make the export reusable.','No external services.','Keep &lt;original&gt; filenames.','Smaller files','Tradeoff not stated.'])assert.ok(html.includes(text),text);
  assert.equal(html.match(/Choose a format that works offline\./g)?.length,1);
  assert.match(html,/class="decision-context" open/);
+});
+test('imported UI markers disappear from the report, evidence and conversation without losing the useful update',()=>{
+ const marker='::created-thread{threadId="00000000-0000-4000-8000-000000000001"}';
+ const output='The queue is ready.\n\n'+Array(39).fill(marker).join('\n')+'\n\nChoose a reviewer.';
+ const turnWithMarkers={...chat.turns[0],request:'Please review.\n'+marker,answer:output,card:{...card('Who should review?'),summary:output,claims:[{text:marker,sources:[]}],evidence:[{id:'valid',label:'Agent response',text:output},{id:'raw',label:'Unverified handoff data',text:'{"internal":true}'}]}};
+ const messages=[{role:'assistant',provider:'codex',text:marker,at:turnWithMarkers.at-10},{role:'assistant',provider:'codex',text:output,id:'source-'+turnWithMarkers.id,at:turnWithMarkers.at}];
+ const h=harness({text:''});
+ const html=h.conversation({...chat,turns:[turnWithMarkers],messages},turnWithMarkers,'');
+ assert.doesNotMatch(html,/created-thread|00000000|Unverified handoff data|Earlier messages|Full response/);
+ assert.match(html,/The queue is ready/);
+ assert.match(html,/Choose a reviewer/);
+ assert.match(html,/Evidence \(1\)/);
+ assert.match(html,/Please review/);
 });

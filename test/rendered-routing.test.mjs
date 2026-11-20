@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 import {editDraft,choiceText,sameDraft} from '../public/drafts.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const functions=app.slice(app.indexOf('const viewedTurns='),app.indexOf('function chatView('));
@@ -12,7 +13,7 @@ function harness(initial={text:''}){
  const newer={id:'new-original',origin:'watched',at:2,provider:'codex',card:{options:[{label:'Show footer legend',tradeoff:'Uses space'}]}};
  const chat={id:'project',provider:'claude',status:'ready',displayTurn:newer.id,turns:[old,newer]};
  const nodes={composer:{dataset:{project:'project',result:old.id,provider:'codex',draft:JSON.stringify(initial)}},prompt:{value:'',focus(){this.focused=true;}},'reply-target':{innerHTML:''},'watched-result-notice':{innerHTML:''}};
- const context=vm.createContext({state:{chats:[chat]},selected:chat.id,sending:false,drafts:{read:()=>draft,write:(id,value)=>draft=value},editDraft,choiceText,sameDraft,crypto:{randomUUID:()=> 'stable-draft'},name:p=>p==='claude'?'Claude':'Codex',esc:s=>String(s??''),$:id=>nodes[id],render:()=>renders.push(true),toast:text=>toasts.push(text)});
+ const context=vm.createContext({readableText,state:{chats:[chat]},selected:chat.id,sending:false,drafts:{read:()=>draft,write:(id,value)=>draft=value},editDraft,choiceText,sameDraft,crypto:{randomUUID:()=> 'stable-draft'},name:p=>p==='claude'?'Claude':'Codex',esc:s=>String(s??''),$:id=>nodes[id],render:()=>renders.push(true),toast:text=>toasts.push(text)});
  vm.runInContext(save+'\n'+functions,context);
  const button={dataset:{choice:'0',choiceProject:chat.id,choiceResult:old.id,choiceProvider:'codex',choiceOption:JSON.stringify([old.card.options[0].label,old.card.options[0].tradeoff])}};
  return {context,chat,old,newer,nodes,button,renders,toasts,get draft(){return draft;},set draft(value){draft=value;}};

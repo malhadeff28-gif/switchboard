@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const finder=app.slice(app.indexOf('function filteredDiscovery('),app.indexOf('function editText('));
 const source=id=>({id,provider:'codex',title:id,cwd:'/tmp/'+id,summary:'Completed result'});
 function harness(){
  const calls=[],chosen=[],fail=new Set(),rendered=[],nodes={'modal':{open:true,querySelectorAll(){return [];},close(){throw Error('Batch must stay open');}},'discover-search':{},'discovery-list':{}};
- const context=vm.createContext({selected:null,state:{chats:[{id:'paused-project',sourceId:'paused',watch:{enabled:false}}]},found:[source('one'),source('two'),source('paused')],discoverySnapshotId:'snapshot-1',discoverySearch:'',nextOffset:1,modalType:'discover',discoveryBatch:{enabled:true,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0},esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),name:()=> 'Codex',$:id=>nodes[id],openModal:(type,html)=>rendered.push(html),choose:id=>chosen.push(id),toast(){},api:async(route,body)=>{calls.push({route,body});if(fail.has(body.id))throw Error('<bad folder>');return {chat:{id:'project-'+body.id,sourceId:body.id,watch:{enabled:true}}};}});
+ const context=vm.createContext({readableText,selected:null,state:{chats:[{id:'paused-project',sourceId:'paused',watch:{enabled:false}}]},found:[source('one'),source('two'),source('paused')],discoverySnapshotId:'snapshot-1',discoverySearch:'',nextOffset:1,modalType:'discover',discoveryBatch:{enabled:true,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0},esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),name:()=> 'Codex',$:id=>nodes[id],openModal:(type,html)=>rendered.push(html),choose:id=>chosen.push(id),toast(){},api:async(route,body)=>{calls.push({route,body});if(fail.has(body.id))throw Error('<bad folder>');return {chat:{id:'project-'+body.id,sourceId:body.id,watch:{enabled:true}}};}});
  vm.runInContext(finder,context);
  return {context,calls,chosen,fail,rendered,nodes};
 }

@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const functions=app.slice(app.indexOf('const viewedTurns='),app.indexOf('function savedDecisions('));
 function harness(connections={codex:{installed:true,signedIn:true},claude:{installed:true,signedIn:false}}){
  const draft={text:'Use shortest route',turnId:'original',provider:'claude'},nodes={'reply-target':{innerHTML:''},'watched-result-notice':{innerHTML:''},'reply-connection-notice':{innerHTML:'',hidden:true}};
  const chat={id:'packing',title:'Packing',provider:'codex',status:'ready',permission:'read',messages:[],turns:[{id:'original',origin:'watched',provider:'codex',at:1,phase:'finished',card:{summary:'Original output',decision:null,options:[],claims:[],evidence:[]}}]};
- const context=vm.createContext({state:{chats:[chat],connections},selected:chat.id,drafts:{read:()=>draft},name:p=>p==='claude'?'Claude':'Codex',esc:s=>String(s??'').replaceAll('<','&lt;'),markdown:s=>s,$:id=>nodes[id],switchingProvider:new Set(),sending:false,autoAdvance:false,icon:()=>'',usageLabel:()=>''});
+ const context=vm.createContext({readableText,state:{chats:[chat],connections},selected:chat.id,drafts:{read:()=>draft},name:p=>p==='claude'?'Claude':'Codex',esc:s=>String(s??'').replaceAll('<','&lt;'),markdown:s=>s,$:id=>nodes[id],switchingProvider:new Set(),sending:false,autoAdvance:false,icon:()=>'',usageLabel:()=>''});
  vm.runInContext(functions,context);return {context,chat,draft,nodes};
 }
 test('signed-out staged draft provider gets persistent direct Connections notice without changing routing',()=>{

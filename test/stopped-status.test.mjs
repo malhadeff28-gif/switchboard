@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const functions=app.slice(app.indexOf('const viewedTurns='),app.indexOf('function savedDecisions('));
 const row=app.slice(app.indexOf('function projectStatus('),app.indexOf('function projectPicker('));
@@ -9,7 +10,7 @@ function harness(error){
  const draft={text:'Keep my draft',turnId:'partial',provider:'codex'};
  const card={summary:'Partial watering schedule',decision:null,options:[],claims:[],evidence:[]};
  const chat={id:'watering',title:'Watering Schedule',cwd:'/tmp/watering',provider:'codex',status:'ready',permission:'read',error,messages:[{role:'assistant',text:'Partial output retained',provider:'codex'}],turns:[{id:'old',provider:'codex',origin:'managed',phase:'finished',at:1,card},{id:'partial',provider:'codex',origin:'managed',phase:'interrupted',at:2,card}]};
- const context=vm.createContext({state:{chats:[chat]},selected:chat.id,drafts:{read:()=>draft},name:()=> 'Codex',esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;'),markdown:s=>s,switchingProvider:new Set(),sending:false,autoAdvance:false,icon:()=>'',usageLabel:()=>''});
+ const context=vm.createContext({readableText,state:{chats:[chat]},selected:chat.id,drafts:{read:()=>draft},name:()=> 'Codex',esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;'),markdown:s=>s,switchingProvider:new Set(),sending:false,autoAdvance:false,icon:()=>'',usageLabel:()=>''});
  vm.runInContext(functions+'\n'+row,context);
  return {context,chat,draft};
 }

@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
+import {readableText} from '../public/readable.js';
 
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const finder=app.slice(app.indexOf('function discoveryRows('),app.indexOf('function editText('));
 function harness(chats){
  const calls=[],chosen=[],closed=[];
- const context=vm.createContext({state:{chats},discoverySnapshotId:'snapshot-1',discoveryBatch:{enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0},esc:s=>String(s).replaceAll('"','&quot;'),name:p=>p==='claude'?'Claude':'Codex',
+ const context=vm.createContext({readableText,state:{chats},discoverySnapshotId:'snapshot-1',discoveryBatch:{enabled:false,selected:new Set(),errors:new Map(),busy:false,followed:0,skipped:0},esc:s=>String(s).replaceAll('"','&quot;'),name:p=>p==='claude'?'Claude':'Codex',
   $:()=>({close(){closed.push(true);}}),choose:id=>chosen.push(id),toast(){},
   api:async(route,body)=>{calls.push({route,body});return {chat:{id:'new-project',sourceId:body.id}};}});
  vm.runInContext(finder,context);
