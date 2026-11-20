@@ -1,3 +1,4 @@
+import {renderMarkdown} from './local-files.js';
 import {draftStore,replyRequestId,choiceText,editDraft} from './drafts.js';
 let state={chats:[],ideas:[],connections:{}}, token='', root='', selected=null, modalType=null, found=[], nextOffset=null, query='', sending=false, renderTimer;
 let discoverySnapshotId=null;
@@ -33,7 +34,7 @@ function saveDraft(id,text,choiceTarget) {
   return drafts.write(id,{...editDraft(target,text),...(choiceTarget?{choice:choiceTarget.choice}:{}),id:target.id||crypto.randomUUID()});
 }
 function choose(id){selected=id;localStorage.setItem('switchboard-selected',id||'');render();}
-function markdown(text){return esc(String(text||'').trim()).replace(/```[^\n]*\n([\s\S]*?)```/g,'<pre>$1</pre>').replace(/^#{1,4} (.+)$/gm,'<strong class="message-heading">$1</strong>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a class="message-link" href="$2" target="_blank" rel="noopener noreferrer">$1 ↗</a>').replace(/\n/g,'<br>');}
+function markdown(text,project){return renderMarkdown(text,{project,canReveal:state.canRevealFiles===true});}
 function row(c){const active=c.id===selected;return `<button class="project-row ${active?'selected':''}" data-select="${c.id}"><span class="state-dot ${c.status}"></span><span class="project-copy"><span class="project-name">${esc(c.title)}</span><span class="project-sub">${c.demo?'Demo · ':''}${name(c.provider)} · ${c.status==='watching'?'Working in original chat':c.status==='running'?'Working':c.status==='stopping'?'Stopping':c.status==='parked'?'Caught up':c.error?'Needs attention':'Ready for you'}</span></span>${c.priority?' <span class="star">★</span>':''}</button>`;}
 function render(){
  const focus=document.activeElement?.id, start=document.activeElement?.selectionStart, end=document.activeElement?.selectionEnd;
@@ -103,7 +104,7 @@ function replyTarget(c) {
 }
 function turnView(c){
  const t=visibleTurn(c);
- if(!t)return `<section class="handoff-card"><div class="card-kicker">Project context</div><div class="handoff-summary">${markdown(c.summary)}</div><p>${esc(c.nextAction)}</p></section>`;
+ if(!t)return `<section class="handoff-card"><div class="card-kicker">Project context</div><div class="handoff-summary">${markdown(c.summary,c)}</div><p>${esc(c.nextAction)}</p></section>`;
  const card=t.card, evidence=card.evidence||[];
  const evidenceId=e=>'e-'+c.id+'-'+e.id;
  const refs=ids=>ids.map(id=>evidence.findIndex(e=>e.id===id)).filter(i=>i>=0).map(i=>`<button type="button" data-evidence="${esc(evidenceId(evidence[i]))}" aria-label="Open evidence ${i+1}">[${i+1}]</button>`).join(' ');
@@ -114,7 +115,7 @@ function turnView(c){
  const hasDecision=(t.analysis==='ready'&&!unknownDecision)||(sourceOnly&&card.decision);
  const status=t.analysis==='analyzing'||t.analysis==='queued'?'Preparing the handoff…':unknownDecision?'Review the original response to confirm whether a decision is needed.':sourceOnly?'Showing the original response and recorded evidence.':t.analysisError;
  const retry=t.origin==='watched' && c.watch?.enabled && (t.analysis==='error'||sourceOnly||unknownDecision);
- return `<section class="handoff-card">${prev}<div class="card-kicker">${esc(name(t.provider))} · ${esc(t.phase)} · ${t.origin==='watched'?'Watched chat':'Switchboard turn'}</div><h2>What happened</h2><div class="handoff-summary">${markdown(card.summary)}</div>${card.claims.map(x=>`<p class="claim">${esc(x.text)} ${x.sources.length?refs(x.sources):'<small>Agent reported</small>'}</p>`).join('')}
+ return `<section class="handoff-card">${prev}<div class="card-kicker">${esc(name(t.provider))} · ${esc(t.phase)} · ${t.origin==='watched'?'Watched chat':'Switchboard turn'}</div><h2>What happened</h2><div class="handoff-summary">${markdown(card.summary,c)}</div>${card.claims.map(x=>`<p class="claim">${esc(x.text)} ${x.sources.length?refs(x.sources):'<small>Agent reported</small>'}</p>`).join('')}
  ${evidence.length?`<h3>Evidence</h3><div class="source-list">${evidence.map((e,i)=>`<details id="${esc(evidenceId(e))}"><summary>[${i+1}] ${esc(e.label)}</summary><pre>${esc(e.text)}</pre></details>`).join('')}</div>`:''}
  ${status?`<div class="analysis-status" role="status">${esc(status)} ${retry?'<button class="text-button" data-action="analyze">Retry analysis</button>':''}</div>`:''}
  ${hasDecision?`<h3>${card.decision?(sourceOnly?'Question from the original response':'Decision'):'No decision needed'}</h3>${card.decision?`<p>${esc(card.decision)}</p><div class="decision-options">${options}</div>`:''}`:''}</section>`;
@@ -125,8 +126,8 @@ function chatView(c){const busy=['running','stopping'].includes(c.status);const 
  ${c.permissionNotice?`<div class="notice">${esc(c.permissionNotice)}</div>`:''}
  ${c.unseenWatchedTurn&&visibleTurn(c)?.id!==c.unseenWatchedTurn?`<div class="notice">Your original chat finished while this reply was running. <button type="button" class="text-button" data-action="show-watched-result">Open its result ↗</button></div>`:''}
  ${turnView(c)}
- ${c.messages.length?`<details class="conversation" ${c.messages.some(m=>!m.imported)?'open':''}><summary>Conversation <span>${c.messages.length} messages${c.messages.every(m=>m.imported)?' · imported excerpt':''}</span></summary>${c.messages.map(m=>`<article class="message ${m.role}"><div class="message-label">${m.role==='user'?'YOU':name(m.provider)}${m.imported?' <span>Imported context</span>':''}</div><div class="message-body">${markdown(m.text)}</div></article>`).join('')}</details>`:''}
- ${busy?`<section class="working-card"><span class="pulse-dot"></span><strong>${esc(c.activity||'Working on your request')}</strong><button data-action="stop" class="text-button" ${c.status==='stopping'?'disabled':''}>${c.status==='stopping'?'Stopping…':'Stop'}</button>${c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0])}</div>`:''}</section>`:''}</div>
+ ${c.messages.length?`<details class="conversation" ${c.messages.some(m=>!m.imported)?'open':''}><summary>Conversation <span>${c.messages.length} messages${c.messages.every(m=>m.imported)?' · imported excerpt':''}</span></summary>${c.messages.map(m=>`<article class="message ${m.role}"><div class="message-label">${m.role==='user'?'YOU':name(m.provider)}${m.imported?' <span>Imported context</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`).join('')}</details>`:''}
+ ${busy?`<section class="working-card"><span class="pulse-dot"></span><strong>${esc(c.activity||'Working on your request')}</strong><button data-action="stop" class="text-button" ${c.status==='stopping'?'disabled':''}>${c.status==='stopping'?'Stopping…':'Stop'}</button>${c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0],c)}</div>`:''}</section>`:''}</div>
  <div class="composer-wrap">${c.status==='parked'?'<div class="composer-note">This chat is caught up. Send a prompt whenever you want to continue.</div>':''}<form id="composer"><div id="reply-target" class="composer-note">${replyTarget(c)}</div><label class="sr-only" for="prompt">Your prompt for ${name(provider)}</label><textarea id="prompt" placeholder="Give ${name(provider)} a direction…" ${busy||sending?'disabled':''}>${esc(drafts.read(c.id).text)}</textarea><div class="composer-footer"><span>${busy?'This agent is working. Your next chat is ready when you are.':autoAdvance?'Your agent keeps going. You move to the next chat.':'You’ll stay here after sending.'}</span><button class="send-button" type="submit" ${busy||sending||changing?'disabled':''}>${busy?'Working…':'Send'} <span>↗</span></button></div></form><div class="below-composer"><button class="text-button" data-action="park" ${busy?'disabled':''}>✓ I’m caught up</button><button class="text-button mobile-memory" data-action="memory">Project memory</button><button class="text-button" data-action="next">Next ready chat →</button></div></div>`;}
 function savedDecisions(c) {
   return [...(c.confirmedDecisions||[]).map(d=>`<li><span>✓</span>${esc(d)}</li>`),
@@ -343,6 +344,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.dataset.terminalLogin){await signInAction(b.dataset.terminalLogin,'terminal');return;}
  if(b.dataset.confirmLogin){await signInAction(b.dataset.confirmLogin,'confirm');return;}
  if(b.dataset.login){await api('/api/connections/login',{provider:b.dataset.login});return;}
+ if(b.dataset.revealFile){b.disabled=true;await api(`/api/chats/${b.dataset.revealProject}/reveal-file`,{path:b.dataset.revealFile});b.disabled=false;toast('Selected the file in Finder.');return;}
  if(b.dataset.import){b.disabled=true;await selectDiscoveredProject(b.dataset.import);return;}
  if(b.dataset.explore){const {chat}=await api('/api/ideas/start',{id:b.dataset.explore,provider:state.connections.codex?.signedIn?'codex':'claude'});if(!state.chats.some(c=>c.id===chat.id))state.chats.push(chat);saveDraft(chat.id,`Help me think through this idea: ${chat.goal}\nAsk me a useful question and suggest a small first step.`);choose(chat.id);$('prompt').focus();}
  }catch(error){b.disabled=false;toast(error.message);}});

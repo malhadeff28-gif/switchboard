@@ -19,6 +19,11 @@ test('accepted send returns the next chat immediately, rejects duplicate launche
   const rejected=await fetch(url+'/api/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(rejected.status,403);
   const originReject=await fetch(url+'/api/demo',{method:'POST',headers:{'Content-Type':'application/json','X-Switchboard-Token':token,Origin:'https://attacker.example'},body:'{}'});assert.equal(originReject.status,403);
   const demo=await post('/api/demo',{});assert.equal(demo.status,200);const first=demo.json.chat;
+  const revealRoute=`/api/chats/${first.id}/reveal-file`;
+  const unauthenticatedReveal=await fetch(url+revealRoute,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path.join(root,'package.json')})});
+  assert.equal(unauthenticatedReveal.status,403);
+  assert.equal((await post(revealRoute,{path:path.join(root,'package.json')})).status,400);
+
   const time=performance.now();const sent=await post(`/api/chats/${first.id}/send`,{text:'Try this direction',requestId:'one'});assert.equal(sent.status,202);assert.ok(sent.json.nextId);assert.notEqual(sent.json.nextId,first.id);assert.ok(performance.now()-time<1000);
   const repeat=await post(`/api/chats/${first.id}/send`,{text:'Try this direction',requestId:'one'});assert.equal(repeat.json.duplicate,true);
   const conflict=await post(`/api/chats/${first.id}/send`,{text:'Second task',requestId:'two'});assert.equal(conflict.status,409);

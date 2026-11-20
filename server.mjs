@@ -1,3 +1,4 @@
+import {revealProjectFile} from './lib/local-files.mjs';
 import {choiceText,sameChoice} from './public/drafts.js';
 import {desktopApplication,findBinary,openProviderDesktop,openProviderTerminal,spawnCli,stopProcess as killGroup} from './lib/providers.mjs';
 import {createMonitor} from './lib/monitor.mjs';
@@ -296,7 +297,7 @@ const server=http.createServer(async(req,res)=>{
     const url=new URL(req.url,`http://${host}`), route=url.pathname;
     if(req.method!=='GET' && (req.headers['x-switchboard-token']!==token || (req.headers.origin && ![`http://127.0.0.1:${port}`,`http://localhost:${port}`].includes(req.headers.origin)))){send(res,403,{error:'Refresh Switchboard before continuing.'});return;}
     if(route==='/api/health' && req.method==='GET'){send(res,200,{app:'switchboard',version,workspace});return;}
-    if(route==='/api/bootstrap' && req.method==='GET'){send(res,200,{...state,chats:publicChats(),connections,desktop:desktopState(),token,root,workspace,storageError});return;}
+    if(route==='/api/bootstrap' && req.method==='GET'){send(res,200,{...state,chats:publicChats(),connections,desktop:desktopState(),token,root,workspace,storageError,canRevealFiles:process.platform==='darwin'});return;}
     if(route==='/api/desktop' && req.method==='GET'){await nativeDiscovery(url.searchParams.has('refresh'));send(res,200,{...desktopState(),sources:nativeSources});return;}
     if(route==='/api/discover' && req.method==='GET'){
       const offset=Number(url.searchParams.get('offset')||0);
@@ -317,6 +318,8 @@ const server=http.createServer(async(req,res)=>{
     if(route==='/api/events' && req.method==='GET'){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});clients.add(res);res.write(`data: ${JSON.stringify({...state,chats:publicChats(),connections,desktop:desktopState(),storageError,workspace})}\n\n`);const heartbeat=setInterval(()=>res.write(': heartbeat\n\n'),15000);req.on('close',()=>{clients.delete(res);clearInterval(heartbeat);});return;}
     if(req.method==='POST'){
       const data=await body(req);
+      const reveal=route.match(/^\/api\/chats\/([^/]+)\/reveal-file$/);
+      if(reveal){await revealProjectFile(requiredChat(reveal[1]),data.path);send(res,200,{ok:true});return;}
       if(route==='/api/desktop/config'){
         await nativeDiscovery(true);if(data.queue!==undefined){if(!Array.isArray(data.queue)||data.queue.length>20||new Set(data.queue).size!==data.queue.length||data.queue.some(id=>!nativeSources.some(s=>s.id===id)))throw new Error('Choose up to 20 distinct existing Codex chats.');state.desktop.queue=data.queue;}
         if(data.monitorAll!==undefined)state.desktop.monitorAll=data.monitorAll===true;
@@ -405,7 +408,7 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'Unknown action.'});return;
     }
-    const assets={'/':'index.html','/app.js':'app.js','/drafts.js':'drafts.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
+    const assets={'/':'index.html','/app.js':'app.js','/drafts.js':'drafts.js','/local-files.js':'local-files.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
     if(req.method==='GET' && assets[route]){const types={'.html':'text/html','.js':'text/javascript','.css':'text/css'};res.writeHead(200,{'Content-Type':types[path.extname(assets[route])],'Cache-Control':'no-cache','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"});res.end(await readFile(path.join(root,'public',assets[route])));return;}
     send(res,404,{error:'Not found.'});
   }catch(error){send(res,error.status||400,{error:error.message});}
