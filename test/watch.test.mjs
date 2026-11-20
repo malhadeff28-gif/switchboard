@@ -31,6 +31,41 @@ test('watch checkpoints complete records and catches up once after restart',asyn
     assert.deepEqual(turns.map(t=>t.phase),['finished','interrupted','failed']);
   }finally{await rm(tmp,{recursive:true,force:true});}
 });
+test('Codex watches recover chat turns created through app tools and their command evidence',async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),'sb-watch-app-tool-'));
+  try{
+    const file=path.join(tmp,'chat.jsonl');
+    const watch=newWatch({provider:'codex',transcriptPath:file,sourceSession:'trial-chat'});
+    const turn_id='received-turn';
+    const root_turn_id='root-in-another-chat';
+    const start=lifecycle('task_started',turn_id,{root_turn_id,turn_attribution:{
+      turn_id,root_turn_id,parent_turn_id:root_turn_id,turn_trigger:'app_tool_create_thread',initiating_agent_path:null
+    }});
+    const command=lifecycle('item_completed',turn_id,{thread_id:'trial-chat',item:{
+      type:'CommandExecution',command:'python3 audit.py',exit_code:0,aggregated_output:'Total: $104.97'
+    }});
+    const transcript=jsonl([
+      start,
+      lifecycle('task_started','nested',{root_turn_id,turn_attribution:{initiating_agent_path:'child'}}),
+      lifecycle('task_complete','nested',{root_turn_id,last_agent_message:'Unrelated child work'}),
+      {...command,payload:{...command.payload,thread_id:'another-chat'}},
+      command,
+      lifecycle('task_complete',turn_id,{root_turn_id,last_agent_message:'The subscription audit is ready.'})
+    ]);
+    await writeFile(file,transcript);
+    watch.offset=Buffer.byteLength(transcript);
+    watch.initialized=true;
+    const turns=[];
+    await pollTranscript(watch,turn=>turns.push(turn));
+    await pollTranscript(watch,turn=>turns.push(turn));
+    assert.deepEqual(turns.map(turn=>turn.id),[turn_id]);
+    assert.equal(watch.phase,'finished');
+    assert.equal(turns[0].answer,'The subscription audit is ready.');
+    assert.deepEqual(turns[0].facts.filter(fact=>fact.kind==='tool').map(fact=>fact.text),[
+      'python3 audit.py\nExit 0\nTotal: $104.97'
+    ]);
+  }finally{await rm(tmp,{recursive:true,force:true});}
+});
 test('watch keeps the reply provider and catches up all paused turns and same-size replacements',async()=>{
   const dir=await mkdtemp(path.join(os.tmpdir(),'sb-watch-resume-'));
   const chat={id:'project',provider:'claude',status:'ready',messages:[]};
