@@ -13,7 +13,7 @@ import {randomUUID, randomBytes} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
-import {attentionStatus,pendingWatchedReply,nextAttention, parseHandoff, agentPrompt, cliArgs, replyContext, decodeEvent, providers} from './lib/core.mjs';
+import {attentionStatus,pendingWatchedReply,nextAttention, parseHandoff, agentPrompt, replyEvidence, cliArgs, replyContext, decodeEvent, providers} from './lib/core.mjs';
 import {discover,discoverPage,discoverySnapshot} from './lib/discovery.mjs';
 const discoveredById=new Map();
 const discoverySnapshots=new Map();
@@ -233,7 +233,8 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission)
   }
   const project=decision?{...chat,confirmedDecisions:[...(chat.confirmedDecisions||[]),decision]}:chat;
   const context=replyContext(project,provider,turn);
-  const prompt=agentPrompt(context,text,provider,turn);
+  const priorEvidence=replyEvidence(turn);
+  const prompt=agentPrompt(context,text,provider,turn,priorEvidence);
   const at=Date.now();
   // Save the accepted request before starting a process. If saving fails,
   // leave this project unchanged so the exact same request can be retried.
@@ -250,7 +251,7 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission)
     complete(chat,'',`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and refresh Connections.`);
     return {nextId:nextAttention(state.chats,chat.id)};
   }
-  const job={child,folder,edit:chat.permission==='edit',stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
+  const job={child,folder,edit:chat.permission==='edit',priorEvidence,stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
   let buffer='',stderr='',messages=[],failure='',final='',sessionCandidate='';
   const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';stopJob(chat.id,job);},20*60*1000);
   function event(line){let raw;try{raw=JSON.parse(line);}catch{return;}addEvidence(job.facts,managedEvidence(provider,raw));const e=decodeEvent(provider,raw);
@@ -273,19 +274,19 @@ function run(chat,text,requestId,turnId,routeProvider,choice,expectedPermission)
     if(error || code!==0 || failure){complete(chat,answer,failure || error?.message || stderr.trim() || `Agent exited with code ${code}.`,job.facts);return;}
     if(!answer){complete(chat,'','The agent finished without a response.');return;}
     if(sessionCandidate)chat.sessions[provider]=sessionCandidate;
-    complete(chat,answer,null,job.facts);
+    complete(chat,answer,null,job.facts,'finished',job.priorEvidence);
   }
   child.on('error',error=>settle(null,error));child.on('close',code=>settle(code));child.stdin.on('error',()=>{});child.stdin.end(prompt);
   return {nextId:nextAttention(state.chats,chat.id)};
 }
-function complete(chat,answer,error,facts=[],phase=error?'failed':'finished'){
+function complete(chat,answer,error,facts=[],phase=error?'failed':'finished',priorEvidence=[]){
   const handoff=parseHandoff(answer);
   const request=chat.messages.findLast(m=>m.role==='user');
   const markerIndex=answer.lastIndexOf('<<<SWITCHBOARD_HANDOFF>>>');
   const prose=markerIndex<0?answer:answer.slice(0,markerIndex).trim();
   const turn={id:randomUUID(),origin:'managed',provider:chat.provider,at:Date.now(),phase,answer:prose,request:request?.text||'',replyTo:request?.replyTo??null,facts,earlier:[]};
   addEvidence(facts,note('message','Agent response',prose));
-  try{if(error)throw Error();turn.card=makeCard(resultPayload(answer),turn);turn.analysis='ready';}
+  try{if(error)throw Error();turn.card=makeCard(resultPayload(answer),turn,priorEvidence);turn.analysis='ready';}
   catch{
     if(markerIndex>=0){
       // Preserve malformed metadata for inspection without exposing it as prose.
