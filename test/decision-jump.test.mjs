@@ -24,7 +24,7 @@ test('actual decision has a keyboard jump above outcome and choices before evide
  assert.ok(html.indexOf('Full claim')<html.indexOf('Use a waitlist?'));
  assert.ok(html.indexOf('data-choice="0"')<html.indexOf('<h3>Evidence'));
  assert.match(html,/Requires tracking/);assert.match(html,/data-evidence="e-project-stable-evidence"/);assert.match(html,/details id="e-project-stable-evidence"/);assert.match(html,/Full evidence/);
- const busy=harness({status:'running'});assert.match(busy.context.turnView(busy.chat),/data-choice="0" disabled/);
+ const busy=harness({status:'running'});assert.match(busy.context.turnView(busy.chat),/data-choice="0"[^>]*disabled/);
 });
 test('no jump for absent/unverified decisions; original source questions still have a jump',()=>{
  for(const options of [{decision:null},{decision:''},{analysis:'queued'},{analysis:'error'}]){const h=harness(options);assert.doesNotMatch(h.context.turnView(h.chat),/data-jump-decision/);}
