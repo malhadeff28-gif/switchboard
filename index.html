@@ -51,6 +51,7 @@
       transition: transform 110ms ease-out, box-shadow 110ms ease-out, background-color 110ms ease-out;
     }
     .download:hover { background: #af2430; }
+    .open-app { color: #244b84; text-underline-offset: 4px; }
     .download:focus-visible { outline: 3px solid #2254aa; outline-offset: 7px; }
     .download:active, .download.pressed {
       transform: translateY(12px);
@@ -64,6 +65,7 @@
   <main>
     <h1>Switchboard</h1>
     <a class="download" href="https://github.com/malhadeff28-gif/switchboard/releases/download/v0.3.1-pilot.3/Switchboard-0.3.1-pilot.3-notarized-arm64.zip" aria-label="Download Switchboard for Apple silicon Mac">Download</a>
+    <a class="open-app" href="https://switchboard.us.com/app/">Open Switchboard</a>
   </main>
   <script>
     const download = document.querySelector('.download');
