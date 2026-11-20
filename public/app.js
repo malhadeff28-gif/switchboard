@@ -16,12 +16,21 @@ const icon=(kind)=>({next:'↗',add:'＋',ideas:'✧',check:'✓',arrow:'→',cl
 function ready(){return state.chats.filter(c=>c.status==='ready').sort((a,b)=>(b.priority||0)-(a.priority||0)||a.readyAt-b.readyAt);}
 function next(exclude){return ready().find(c=>c.id!==exclude)?.id||null;}
 function toast(text){$('toast').textContent=text;$('toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.remove('visible'),4200);}
+const workspaceMismatchMessage='A different Switchboard workspace is open. Reload this tab before sending.';
+function workspaceStatus(){
+ return state.workspaceMismatch?'<div class="notice" role="alert"><strong>A different workspace is open.</strong> Saved drafts remain with the previous workspace. <button type="button" class="text-button" data-action="reload-workspace">Reload workspace ↗</button></div>':'';
+}
+function markWorkspaceMismatch(){
+ if(state.workspaceMismatch)return;
+ state.workspaceMismatch=true;render();
+}
 async function api(route,data,retry=true) {
+  if(data!==undefined&&state.workspaceMismatch)throw Error(workspaceMismatchMessage);
   const response=await fetch(route,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json','X-Switchboard-Token':token},body:data===undefined?undefined:JSON.stringify(data)});
   const json=await response.json();
   if(response.status===403 && retry && data!==undefined && json.error==='Refresh Switchboard before continuing.') {
     const connection=await api('/api/bootstrap');
-    if(connection.workspace!==state.workspace)throw Error('A different Switchboard workspace is open. Reload this tab before sending.');
+    if(connection.workspace!==state.workspace){markWorkspaceMismatch();throw Error(workspaceMismatchMessage);}
     token=connection.token;
     return api(route,data,false);
   }
@@ -54,7 +63,7 @@ function render(){
  ${parked.length?`<div class="list-label">CAUGHT UP <span>${parked.length}</span></div>${parked.filter(filtered).map(row).join('')}`:''}
  <button class="rail-link discover" data-action="discover">${icon('discover')} Find existing projects <span>↗</span></button></div>
  <div class="rail-bottom"><button class="rail-link ${!chat?'active-link':''}" data-action="ideas">${icon('ideas')} Ideas for later <span>${state.ideas.length}</span></button><button class="rail-link" data-action="usage">◷ Usage limits <span>↗</span></button><button class="rail-link" data-action="connections">${icon('settings')} Connections <span class="connection-dot ${Object.values(state.connections).some(c=>c.signedIn)?'connected':''}"></span></button><div class="local-label"><span class="small-dot"></span> Your local workspace <span class="version">v0.3</span></div></div></aside>
- <div class="shell"><header class="topbar"><div><span class="top-eyebrow">YOUR WORKSPACE</span><span class="top-title">Project handoffs</span></div><div class="top-controls"><a class="native-link" href="/desktop">Inside Codex ${state.desktop?.enabled?'●':'↗'}</a><label class="auto-toggle"><input id="auto" type="checkbox" ${autoAdvance?'checked':''}><span class="toggle-track"></span><span>Send & move on</span></label><button class="icon-button" data-action="next" title="Next ready chat (Alt+N)" aria-label="Next ready chat">${icon('next')}</button></div></header><nav class="mobile-nav" aria-label="Workspace tools"><button data-action="ideas">✧ Ideas</button><button data-action="discover">⌘ Find chats</button><button data-action="usage">◷ Usage</button><button data-action="connections">⚙ Connections</button><button data-action="demo">Try demo ↗</button></nav>
+ <div class="shell"><header class="topbar"><div><span class="top-eyebrow">YOUR WORKSPACE</span><span class="top-title">Project handoffs</span></div><div class="top-controls"><a class="native-link" href="/desktop">Inside Codex ${state.desktop?.enabled?'●':'↗'}</a><label class="auto-toggle"><input id="auto" type="checkbox" ${autoAdvance?'checked':''}><span class="toggle-track"></span><span>Send & move on</span></label><button class="icon-button" data-action="next" title="Next ready chat (Alt+N)" aria-label="Next ready chat">${icon('next')}</button></div></header>${workspaceStatus()}<nav class="mobile-nav" aria-label="Workspace tools"><button data-action="ideas">✧ Ideas</button><button data-action="discover">⌘ Find chats</button><button data-action="usage">◷ Usage</button><button data-action="connections">⚙ Connections</button><button data-action="demo">Try demo ↗</button></nav>
  <div class="workspace-grid ${chat?'':'ideas-grid'}"><main id="workspace" data-chat="${chat?.id||''}">${chat?chatView(chat):!state.chats.length&&location.hash!=='#ideas'?firstRun():ideaView(running)}</main>${chat?contextView(chat):ideaAside()}</div>
  <footer class="bottom-status"><span>${running.length?`<span class="pulse-dot"></span> ${running.length} ${running.length===1?'agent is':'agents are'} working in the background`:'<span class="small-dot"></span> Room to think'}</span><span>⌘ Enter to send <i>·</i> Alt N for next <i>·</i> Saved on this computer</span></footer></div>`;
  $('search').addEventListener('input',e=>{query=e.target.value;render();});
@@ -183,7 +192,7 @@ function chatView(c){const busy=['running','stopping'].includes(c.status);const 
  ${turnView(c)}
  ${c.messages.length?`<details class="conversation" ${c.messages.some(m=>!m.imported)?'open':''}><summary>Conversation <span>${c.messages.length} messages${c.messages.every(m=>m.imported)?' · imported excerpt':''}</span></summary>${c.messages.map(m=>`<article class="message ${m.role}"><div class="message-label">${m.role==='user'?'YOU':name(m.provider)}${m.imported?' <span>Imported context</span>':''}</div><div class="message-body">${markdown(m.text,c)}</div></article>`).join('')}</details>`:''}
  ${busy?`<section class="working-card"><span class="pulse-dot"></span><strong>${esc(c.activity||'Working on your request')}</strong><button data-action="stop" class="text-button" ${c.status==='stopping'?'disabled':''}>${c.status==='stopping'?'Stopping…':'Stop'}</button>${c.liveText?`<div class="live-response">${markdown(c.liveText.split('<<<SWITCHBOARD_HANDOFF>>>')[0],c)}</div>`:''}</section>`:''}</div>
- <div class="composer-wrap">${c.status==='parked'?'<div class="composer-note">This chat is caught up. Send a prompt whenever you want to continue.</div>':''}<form id="composer"><div id="reply-target" class="composer-note">${replyTarget(c)}</div><label class="sr-only" for="prompt">Your prompt for ${name(provider)}</label><textarea id="prompt" placeholder="Give ${name(provider)} a direction…" ${busy||sending?'disabled':''}>${esc(drafts.read(c.id).text)}</textarea><div class="composer-footer"><span>${busy?'This agent is working. Your next chat is ready when you are.':autoAdvance?'Your agent keeps going. You move to the next chat.':'You’ll stay here after sending.'}</span><button class="send-button" type="submit" ${busy||sending||changing?'disabled':''}>${busy?'Working…':'Send'} <span>↗</span></button></div></form><div class="below-composer"><button class="text-button" data-action="park" ${busy?'disabled':''}>✓ I’m caught up</button><button class="text-button mobile-memory" data-action="memory">Project memory</button><button class="text-button" data-action="next">Next ready chat →</button></div></div>`;}
+ <div class="composer-wrap">${c.status==='parked'?'<div class="composer-note">This chat is caught up. Send a prompt whenever you want to continue.</div>':''}<form id="composer"><div id="reply-target" class="composer-note">${replyTarget(c)}</div><label class="sr-only" for="prompt">Your prompt for ${name(provider)}</label><textarea id="prompt" placeholder="Give ${name(provider)} a direction…" ${busy||sending?'disabled':''}>${esc(drafts.read(c.id).text)}</textarea><div class="composer-footer"><span>${busy?'This agent is working. Your next chat is ready when you are.':autoAdvance?'Your agent keeps going. You move to the next chat.':'You’ll stay here after sending.'}</span><button class="send-button" type="submit" ${busy||sending||changing||state.workspaceMismatch?'disabled':''}>${busy?'Working…':'Send'} <span>↗</span></button></div></form><div class="below-composer"><button class="text-button" data-action="park" ${busy?'disabled':''}>✓ I’m caught up</button><button class="text-button mobile-memory" data-action="memory">Project memory</button><button class="text-button" data-action="next">Next ready chat →</button></div></div>`;}
 function savedDecisions(c) {
   return [...(c.confirmedDecisions||[]).map(d=>`<li><span>✓</span>${esc(d)}</li>`),
     ...(c.decisions||[]).map(d=>`<li>${esc(d)} <small>(unverified)</small></li>`)].join('');
@@ -197,7 +206,7 @@ function ideaAside(){return `<aside class="context-pane quiet-pane"><div class="
 async function submitPrompt(e) {
   e.preventDefault();
   const c=state.chats.find(c=>c.id===selected);
-  if (!c || sending || switchingProvider.has(c.id) || ['running','stopping'].includes(c.status)) return;
+  if (!c || state.workspaceMismatch || sending || switchingProvider.has(c.id) || ['running','stopping'].includes(c.status)) return;
   const text=$('prompt').value.trim();
   if (!text) return;
   if (text.length>50000) {toast('Your reply is over 50,000 characters. Shorten it and try again.');return;}
@@ -389,7 +398,7 @@ async function followDiscoveredProjects(retryOnly=false){
  }finally{batch.busy=false;if(discoveryBatch===batch&&modalType==='discover'&&$('modal').open)renderDiscovery();}
 }
 function editText(type){const c=state.chats.find(c=>c.id===selected);if(!c)return;const label={decision:'Your decision',goal:'Project goal',requirements:'Pinned requirements'}[type];openModal(type,`<h2>${label}</h2><p class="modal-intro">This stays with the project and travels between agents.</p><form id="memory-form"><label>${label}<textarea name="text" ${type==='requirements'?'maxlength="6000"':'required'}>${type==='decision'?'':esc(c[type])}</textarea></label><button class="primary-button">Save →</button></form>`);$('memory-form').onsubmit=async e=>{e.preventDefault();try{await api(`/api/chats/${c.id}/update`,{[type]:new FormData(e.target).get('text')});$('modal').close();}catch(error){toast(error.message);}};}
-async function action(kind){const c=state.chats.find(c=>c.id===selected);try{
+async function action(kind){if(kind==='reload-workspace'){location.reload();return;}const c=state.chats.find(c=>c.id===selected);try{
  if(c&&kind==='show-draft-result'){viewedTurns.set(c.id,replyAnchor(c));render();return;}
  if(c&&kind==='show-watched-result'){showWatchedResult(c);return;}
  if(c&&kind==='analyze'){await api(`/api/chats/${c.id}/analyze`,{turnId:visibleTurn(c)?.id});return;}
@@ -477,7 +486,7 @@ events.onmessage=e=>{
   const snapshot=JSON.parse(e.data);
   if(snapshot.workspace!==state.workspace){
     events.close();
-    toast('A different Switchboard workspace is open. Reload this tab.');
+    markWorkspaceMismatch();
     return;
   }
   state={...state,...snapshot};
@@ -486,4 +495,4 @@ events.onmessage=e=>{
   renderTimer=setTimeout(render,60);
   updateConnectionCards();
 };
-events.onerror=()=>toast('Reconnecting to your local workspace…');
+events.onerror=()=>{if(!state.workspaceMismatch)toast('Reconnecting to your local workspace…');};
