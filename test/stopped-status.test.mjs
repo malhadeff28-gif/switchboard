@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
 const functions=app.slice(app.indexOf('const viewedTurns='),app.indexOf('function savedDecisions('));
-const row=app.slice(app.indexOf('function row('),app.indexOf('\n',app.indexOf('function row(')));
+const row=app.slice(app.indexOf('function projectStatus('),app.indexOf('function projectPicker('));
 function harness(error){
  const draft={text:'Keep my draft',turnId:'partial',provider:'codex'};
  const card={summary:'Partial watering schedule',decision:null,options:[],claims:[],evidence:[]};
@@ -33,5 +33,5 @@ test('auth and genuine failures retain existing recovery actions and escaped det
  const sameText=harness('You stopped this turn.');
  sameText.chat.turns.at(-1).phase='failed';
  assert.match(sameText.context.chatView(sameText.chat),/This turn needs attention/);
- const h=harness(null);assert.equal(h.context.turnStatus(h.chat),'');assert.match(h.context.row(h.chat),/Ready for you/);
+ const h=harness(null);assert.equal(h.context.turnStatus(h.chat),'');assert.match(h.context.row(h.chat),/· Ready/);
 });

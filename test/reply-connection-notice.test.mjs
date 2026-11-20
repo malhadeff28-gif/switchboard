@@ -12,13 +12,13 @@ function harness(connections={codex:{installed:true,signedIn:true},claude:{insta
 }
 test('signed-out staged draft provider gets persistent direct Connections notice without changing routing',()=>{
  const h=harness(),before=JSON.stringify(h.draft),html=h.context.chatView(h.chat);
- assert.match(html,/id="reply-connection-notice"/);assert.match(html,/role="status"/);assert.match(html,/Sign in to Claude in Connections before sending this reply/);assert.match(html,/data-action="connections">Open Connections/);
+ assert.match(html,/id="reply-connection-notice"/);assert.match(html,/role="status"/);assert.match(html,/Sign in to Claude to send/);assert.match(html,/data-action="connections">Connections/);
  assert.equal(h.context.replyAnchor(h.chat),'original');assert.equal(h.context.replyProvider(h.chat),'claude');assert.equal(JSON.stringify(h.draft),before);assert.match(html,/Use shortest route/);
  // The other project's connected provider does not inherit this draft's notice.
  h.context.drafts.read=id=>id==='packing'?h.draft:{text:'',provider:'codex'};assert.equal(h.context.replyConnectionNotice({...h.chat,id:'other'}),'');
 });
 test('missing CLI is distinguished; demo, connected and unknown status stay unaffected',()=>{
- const h=harness({claude:{installed:false,signedIn:false}});assert.match(h.context.replyConnectionNotice(h.chat),/Install the Claude coding CLI/);
+ const h=harness({claude:{installed:false,signedIn:false}});assert.match(h.context.replyConnectionNotice(h.chat),/Install the Claude CLI/);
  assert.equal(h.context.replyConnectionNotice({...h.chat,demo:true}),'');
  h.context.state.workspaceMismatch=true;assert.equal(h.context.replyConnectionNotice(h.chat),'');h.context.state.workspaceMismatch=false;
  for(const connection of [undefined,{}, {installed:true},{installed:true,signedIn:true},{installed:true,signedIn:false,connectionError:'Status could not be checked'}]){

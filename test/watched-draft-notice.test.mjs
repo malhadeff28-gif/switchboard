@@ -50,7 +50,7 @@ test('staged choice immediately updates notice and reply target without a full r
  Object.assign(h.context,{c:h.chat,t:h.chat.turns[0],b:{dataset:{choice:'0'}},option:{label:'Shortest',tradeoff:'Less scenic'},choiceText:()=> 'Use option 1: Shortest. Less scenic',saveDraft:(id,text,target)=>Object.assign(h.draft,{text,turnId:target.turnId,provider:target.provider,choice:target.choice})});
  h.chat.turns[0].card.options=[h.context.option];h.context.b.dataset={choice:'0',choiceProject:'routes',choiceResult:'original',choiceProvider:'codex',choiceOption:JSON.stringify(['Shortest','Less scenic'])};
  h.context.stageRenderedChoice(h.context.b);
- assert.equal(h.nodes['watched-result-notice'].hidden,false);assert.match(h.nodes['watched-result-notice'].innerHTML,/show-watched-result/);assert.match(h.nodes['reply-target'].innerHTML,/Original chat/);assert.equal(h.draft.turnId,'original');assert.equal(textarea.focused,true);assert.equal(h.renders.length,0);
+ assert.equal(h.nodes['watched-result-notice'].hidden,false);assert.match(h.nodes['watched-result-notice'].innerHTML,/show-watched-result/);assert.equal(h.nodes['reply-target'].innerHTML,'');assert.equal(h.draft.turnId,'original');assert.equal(textarea.focused,true);assert.equal(h.renders.length,0);
 });
 test('clearing a restored anchor renders the changed visible result once before the next typed reply binds',()=>{
  const h=harness(),textarea={value:'',focused:true,selectionStart:0};h.nodes.prompt=textarea;

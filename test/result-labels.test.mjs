@@ -22,14 +22,15 @@ test('result picker distinguishes original questions and Switchboard replies wit
 test('composer labels its actual draft result and preserves Show draft’s result and legacy anchors',()=>{
  const draft={text:'My decision',turnId:'original-1',provider:'claude'},h=harness(draft);
  vm.runInContext("viewedTurns.set('event-seats','reply-3')",h);
- const target=h.replyTarget(chat);assert.match(target,/Sending to Claude about Original chat · Codex/);assert.match(target,/Should we use reserved seats/);assert.match(target,/data-action="show-draft-result"/);assert.equal(h.replyAnchor(chat),'original-1');
+ const target=h.replyTarget(chat);assert.match(target,/Draft is for a different result/);assert.match(target,/title="Original chat · Codex.*Should we use reserved seats/);assert.match(target,/data-action="show-draft-result"/);assert.equal(h.replyAnchor(chat),'original-1');assert.equal(h.replyProvider(chat),'claude');
  assert.equal(h.replyTarget(chat),target);assert.equal(draft.turnId,'original-1');
- const legacy=harness({text:'Old draft'});assert.equal(legacy.replyAnchor(chat),null);assert.equal(legacy.replyTarget(chat),'Sending to Codex for this project');
- const reply=harness({text:'Reply',turnId:'reply-3'});assert.match(reply.replyTarget(chat),/about Switchboard reply · Codex/);
+ const legacy=harness({text:'Old draft'});assert.equal(legacy.replyAnchor(chat),null);assert.equal(legacy.replyTarget(chat),'Replying to the project.');
+ const reply=harness({text:'Reply',turnId:'reply-3'});assert.equal(reply.replyTarget(chat),'');
 });
 test('stored question previews are concise, escaped, and optional',()=>{
  const malicious=turn('a"<','watched','<script>alert("x")</script> & '+('long question '.repeat(20))),other=turn('safe','managed',null);
  const c={...chat,turns:[malicious,other]},h=harness({text:'Draft',turnId:malicious.id});
+ vm.runInContext("viewedTurns.set('event-seats','safe')",h);
  for(const html of [h.turnView(c),h.replyTarget(c)]){assert.doesNotMatch(html,/<script>/);assert.match(html,/&lt;script&gt;/);assert.match(html,/&amp;/);assert.match(html,/…/);}
  assert.match(h.turnView(c),/value="a&quot;&lt;"/);
  assert.ok(h.resultLabel(malicious).endsWith('…'));assert.ok(!h.resultLabel(other).endsWith(' · '));

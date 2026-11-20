@@ -73,7 +73,9 @@ test('reply label and provider use the supplied rendered snapshot despite newer 
  const original={id:'A',text:'Same text',provider:'codex',turnId:'old-original'};
  const h=harness(original);h.draft={...original,id:'B',provider:'claude',turnId:'new-original'};
  assert.equal(h.context.replyProvider(h.chat,original),'codex');assert.equal(h.context.replyAnchor(h.chat,original),'old-original');
- assert.match(h.context.replyTarget(h.chat,original),/Sending to Codex about Original chat.*Which order/);
+ assert.equal(h.context.replyTarget(h.chat,original),'');
+ vm.runInContext("viewedTurns.set('project','new-original')",h.context);
+ assert.match(h.context.replyTarget(h.chat,original),/title="Original chat · Codex.*Which order/);
 });
 test('provider switching rejects stale rendered drafts and preserves replacements during its await',async()=>{
  const branch=app.slice(app.indexOf(' if(b.dataset.provider){'),app.indexOf(' if(b.dataset.desktopLogin)'));

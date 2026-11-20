@@ -28,7 +28,7 @@ test('actual decision has a keyboard jump above outcome and choices before evide
 });
 test('no jump for absent/unverified decisions; original source questions still have a jump',()=>{
  for(const options of [{decision:null},{decision:''},{analysis:'queued'},{analysis:'error'}]){const h=harness(options);assert.doesNotMatch(h.context.turnView(h.chat),/data-jump-decision/);}
- const h=harness({analysis:'source'});assert.match(h.context.turnView(h.chat),/Jump to decision/);assert.match(h.context.turnView(h.chat),/Decision from the original response/);
+ const h=harness({analysis:'source'});assert.match(h.context.turnView(h.chat),/Jump to decision/);assert.match(h.context.turnView(h.chat),/>Decision<\/h3>/);
 });
 test('jump targets shown result only, scrolls existing pane and focuses heading without touching drafts',()=>{
  const h=harness(),before=JSON.stringify(h.chat),button={dataset:{jumpProject:'project',jumpDecision:'shown'}};
