@@ -277,11 +277,20 @@ function run(chat,text,requestId,turnId,routeProvider,choice){
 function complete(chat,answer,error,facts=[],phase=error?'failed':'finished'){
   const handoff=parseHandoff(answer);
   const request=chat.messages.findLast(m=>m.role==='user');
-  const turn={id:randomUUID(),origin:'managed',provider:chat.provider,at:Date.now(),phase,answer:handoff.text,request:request?.text||'',replyTo:request?.replyTo??null,facts,earlier:[]};
-  addEvidence(facts,note('message','Agent response',turn.answer));
+  const markerIndex=answer.lastIndexOf('<<<SWITCHBOARD_HANDOFF>>>');
+  const prose=markerIndex<0?answer:answer.slice(0,markerIndex).trim();
+  const turn={id:randomUUID(),origin:'managed',provider:chat.provider,at:Date.now(),phase,answer:prose,request:request?.text||'',replyTo:request?.replyTo??null,facts,earlier:[]};
+  addEvidence(facts,note('message','Agent response',prose));
   try{if(error)throw Error();turn.card=makeCard(resultPayload(answer),turn);turn.analysis='ready';}
   catch{
-    turn.answer=answer;
+    if(markerIndex>=0){
+      // Preserve malformed metadata for inspection without exposing it as prose.
+      if(!prose){
+        turn.answer='The agent returned a handoff without a readable response. Review the evidence.';
+        addEvidence(facts,note('message','Agent response',turn.answer));
+      }
+      addEvidence(facts,note('message','Unverified handoff data',answer.slice(markerIndex)));
+    }
     turn.card=rawCard(turn);
     turn.analysis='raw';
     if(!error)turn.analysisError='The decision could not be verified from this handoff. Review the original response.';
@@ -289,7 +298,10 @@ function complete(chat,answer,error,facts=[],phase=error?'failed':'finished'){
   (chat.turns||=[]).push(turn);chat.displayTurn=turn.id;
   if(!error && !chat.demo)recordResponse(chat.provider);
   if(turn.answer)chat.messages.push({id:randomUUID(),role:'assistant',provider:chat.provider,text:turn.answer,at:Date.now()});
-  if(answer && !error){chat.summary=handoff.summary;chat.nextAction=handoff.nextAction;}
+  if(answer && !error){
+    chat.summary=turn.analysis==='ready'?handoff.summary:turn.answer.slice(0,900);
+    chat.nextAction=turn.analysis==='ready'?handoff.nextAction:'Read the response and choose your next step.';
+  }
   chat.status='ready';chat.readyAt=Date.now();chat.liveText='';chat.activity='';chat.error=error||null;update({immediate:true,background:true});}
 async function login(provider){validProvider(provider);if(!binaries[provider])throw new Error(`Install ${provider==='codex'?'Codex CLI':'Claude Code'} first.`);if(authJobs.has(provider))return;
   authErrors.delete(provider);
