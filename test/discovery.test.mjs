@@ -47,3 +47,24 @@ test('discovery pagination keeps a stable order while the source chats change',a
   assert.equal((await discoverPage({...options,offset:2})).projects.find(p=>p.provider==='codex').sourceSession,'c');
  } finally {if(previous!==undefined)process.env.CODEX_HOME=previous;await rm(home,{recursive:true,force:true});}
 });
+test('native discovery uses only confirmed lifecycle in its tail for attributed app chats',async()=>{
+ const home=await mkdtemp(path.join(os.tmpdir(),'switchboard-attributed-discovery-'));
+ const previous=process.env.CODEX_HOME;delete process.env.CODEX_HOME;
+ try{
+  const dir=path.join(home,'.codex','sessions');await mkdir(dir,{recursive:true});
+  const start=turn=>({type:'event_msg',payload:{type:'task_started',turn_id:turn,root_turn_id:'sender',turn_attribution:{turn_id:turn,root_turn_id:'sender',parent_turn_id:'sender',turn_trigger:'app_tool_create_thread',initiating_agent_path:null}}});
+  const complete=turn=>({type:'event_msg',payload:{type:'task_complete',turn_id:turn,root_turn_id:'sender'}});
+  const padding={type:'response_item',payload:{type:'function_call_output',output:'x'.repeat(220000)}};
+  const cases=[
+   ['finished',[start('own'),complete('own')],'ready'],
+   ['working',[start('own')],'working'],
+   ['context',[start('old'),padding,{type:'event_msg',payload:{type:'item_completed',turn_id:'own',thread_id:'context'}},complete('own')],'ready'],
+   ['unknown',[start('own'),padding,complete('own')],'unknown'],
+   ['nested',[start('own'),{...start('nested'),payload:{...start('nested').payload,turn_attribution:{...start('nested').payload.turn_attribution,initiating_agent_path:'child'}}},complete('nested')],'working'],
+   ['foreign',[start('own'),{...complete('own'),payload:{...complete('own').payload,thread_id:'another-chat'}}],'working']
+  ];
+  for(const [id,rows] of cases)await writeFile(path.join(dir,id+'.jsonl'),[{type:'session_meta',payload:{id,cwd:home,originator:'Codex Desktop',source:'vscode'}},{type:'response_item',payload:{type:'message',role:'user',content:'Trial'}},...rows].map(JSON.stringify).join('\n'));
+  const found=await discover({home,exclude:null});
+  for(const [id,,expected]of cases)assert.equal(found.find(p=>p.sourceSession===id).desktopStatus,expected,id);
+ }finally{if(previous!==undefined)process.env.CODEX_HOME=previous;await rm(home,{recursive:true,force:true});}
+});
