@@ -49,3 +49,24 @@ test('selection and keyboard deselection restore the same row focus and dialog/l
  c.toggleDiscoveredProject('one');
  assert.equal(focused.length,2);assert.equal(c.discoveryBatch.selected.size,0);assert.equal(dialog.scrollTop,230);assert.equal(list.scrollTop,120);
 });
+
+test('finder distinguishes unloaded results from exhausted no-match search and updates older action while typing',()=>{
+ const h=harness(),c=h.context;
+ c.discoverySearch='Coffee Chat Organizer';c.renderDiscovery();
+ assert.match(h.rendered.at(-1),/No matches in the chats loaded so far/);
+ assert.match(h.rendered.at(-1),/>Search older chats<\/button>/);
+ assert.match(h.rendered.at(-1),/value="Coffee Chat Organizer"/);
+ assert.doesNotMatch(h.rendered.at(-1),/Start a new project/);
+ const older={};h.nodes['discover-older']=older;
+ h.nodes['discover-search'].oninput({target:{value:''}});assert.equal(older.textContent,'Show older chats');
+ h.nodes['discover-search'].oninput({target:{value:'Coffee Chat Organizer'}});assert.equal(older.textContent,'Search older chats');
+ c.nextOffset=null;c.renderDiscovery();assert.match(h.rendered.at(-1),/No matching chats found/);assert.doesNotMatch(h.rendered.at(-1),/data-action="older-chats"/);
+ c.discoverySearch='';c.found=[];c.renderDiscovery();assert.match(h.rendered.at(-1),/No local chats found/);
+});
+test('older-page focus prefers an actionable matching row, then older action, then search',()=>{
+ const h=harness(),c=h.context,focused=[];
+ let row={focus:()=>focused.push('match')};h.nodes.modal.querySelector=()=>row;
+ h.nodes['discover-older']={focus:()=>focused.push('older')};h.nodes['discover-search'].focus=()=>focused.push('search');
+ c.focusDiscoveryNext();row=null;c.focusDiscoveryNext();delete h.nodes['discover-older'];c.focusDiscoveryNext();
+ assert.deepEqual(focused,['match','older','search']);
+});
