@@ -92,15 +92,20 @@ function replyAnchor(c) {
   // Older drafts without a recorded result must not be attached to a newer result.
   return draft.turnId??null;
 }
+function resultLabel(turn) {
+ const origin=turn.origin==='watched'?'Original chat':turn.origin==='managed'?'Switchboard reply':'Project result';
+ const question=typeof turn.card?.decision==='string'?turn.card.decision.replace(/\s+/g,' ').trim():'';
+ const preview=question.length>90?question.slice(0,89)+'…':question;
+ return `${origin} · ${name(turn.provider)} · ${new Date(turn.at).toLocaleString()} · ${turn.phase}${preview?' · '+preview:''}`;
+}
 function replyTarget(c) {
   const id=replyAnchor(c);
   const provider=name(replyProvider(c));
   if (id===null) return 'Sending to '+provider+' for this project';
   const turn=c.turns?.find(t=>t.id===id);
   if (!turn) return 'This draft’s result is unavailable. Clear the draft to start again.';
-  const time=new Date(turn.at).toLocaleString();
   const show=visibleTurn(c)?.id!==id ? ' <button type="button" class="text-button" data-action="show-draft-result">Show draft’s result ↗</button>' : '';
-  return `Sending to ${provider} about the ${name(turn.provider)} result from ${esc(time)}${show}`;
+  return `Sending to ${provider} about ${esc(resultLabel(turn))}${show}`;
 }
 function turnView(c){
  const t=visibleTurn(c);
@@ -108,7 +113,7 @@ function turnView(c){
  const card=t.card, evidence=card.evidence||[];
  const evidenceId=e=>'e-'+c.id+'-'+e.id;
  const refs=ids=>ids.map(id=>evidence.findIndex(e=>e.id===id)).filter(i=>i>=0).map(i=>`<button type="button" data-evidence="${esc(evidenceId(evidence[i]))}" aria-label="Open evidence ${i+1}">[${i+1}]</button>`).join(' ');
- const prev=c.turns.length>1?`<label class="turn-picker">Result <select id="which-turn">${c.turns.slice().reverse().map(x=>`<option value="${esc(x.id)}" ${x.id===t.id?'selected':''}>${esc(name(x.provider))} · ${esc(new Date(x.at).toLocaleString())} · ${esc(x.phase)}</option>`).join('')}</select></label>`:'';
+ const prev=c.turns.length>1?`<label class="turn-picker">Result <select id="which-turn">${c.turns.slice().reverse().map(x=>`<option value="${esc(x.id)}" ${x.id===t.id?'selected':''}>${esc(resultLabel(x))}</option>`).join('')}</select></label>`:'';
  const options=card.options.map((o,i)=>`<button class="decision-option" data-choice="${i}" ${['running','stopping'].includes(c.status)?'disabled':''}><strong>${i+1}. ${esc(o.label)}</strong><span>${esc(o.tradeoff)}</span></button>`).join('');
  const unknownDecision=t.analysis==='ready' && card.decision===null && !card.decisionFormatValid;
  const sourceOnly=t.analysis==='source';
