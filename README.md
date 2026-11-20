@@ -28,7 +28,7 @@ On Mac, if Finder does not open the unsigned launcher, open Terminal, type `sh` 
 
 A watched chat remains open in its original application. Your first Switchboard reply starts a separate session in that project folder. Later replies resume the corresponding Switchboard session for that provider. The receiving provider gets the handoff you answered, its ordered options and evidence, relevant prior instructions, saved project decisions, and a bounded conversation excerpt. A project starts with read-only file access. **File edits** enables workspace writes through the selected provider. Claude shell commands are unavailable in managed project turns.
 
-The composer shows which provider and result your draft will answer. Browsing other results keeps that draft attached to its original result. In **Project memory**, use **Pin requirements** for instructions that should carry into every agent reply, and **Save a decision** for choices you’ve confirmed.
+The composer shows which provider and result your draft will answer. Browsing other results keeps that draft attached to its original result. Replying to an older result starts a fresh session if the selected provider has newer work in the project. In **Project memory**, use **Pin requirements** for instructions that should carry into every agent reply, and **Save a decision** for choices you’ve confirmed.
 
 Selecting a chat enables automatic analysis on that provider’s account and may consume its usage allowance. A watched completion appears immediately. Switchboard asks Codex for a text-only sample or runs Claude Code with tools and session persistence disabled. It presents cited chat, command, and file records. A reported claim can have no independent verification. A failed analysis leaves the original output available with a retry button. A provider CLI without the required sampling or hook interface may need an update.
 
@@ -37,6 +37,8 @@ For Claude, following a chat installs Switchboard’s own Stop and StopFailure h
 ## Storage and other features
 
 The portable launcher stores settings, chats and handoffs under the user data directory: **Library/Application Support/Switchboard** on Mac, **%LOCALAPPDATA%\\Switchboard** on Windows, and **$XDG_DATA_HOME/Switchboard** or **~/.local/share/Switchboard** on Linux. Keep this directory when replacing the download. Source checkouts continue to use **.local**. Draft prompts are kept in browser local storage. Sign-in stays with the CLI. There is no Switchboard cloud service.
+
+Close older pilot launchers before switching builds. Current builds allow one server to write to a given workspace, even if the instances use different ports. If the server was killed, the next launch can reclaim the lock when its owner has exited.
 
 The ideas shelf, manual usage snapshots, priorities, stop controls, and simulated demo remain available. The separate **Inside Codex** page is an experimental Mac feature for navigating existing native chats. The portable workspace works through the browser.
 

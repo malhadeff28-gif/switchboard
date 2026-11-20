@@ -2,6 +2,7 @@ import {findBinary,spawnCli,stopProcess as killGroup} from './lib/providers.mjs'
 import {createMonitor} from './lib/monitor.mjs';
 import {makeCard,rawCard,resultPayload} from './lib/handoffs.mjs';
 import {addEvidence,managedEvidence,note} from './lib/turns.mjs';
+import {lockWorkspace,workspaceIdentity} from './lib/workspace.mjs';
 import http from 'node:http';
 import {readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, statSync, realpathSync} from 'node:fs';
 import {readFile} from 'node:fs/promises';
@@ -10,18 +11,29 @@ import {randomUUID, randomBytes} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
-import {attentionStatus,nextAttention, parseHandoff, agentPrompt, cliArgs, decodeEvent, providers} from './lib/core.mjs';
-import {discover,discoverPage} from './lib/discovery.mjs';
+import {attentionStatus,nextAttention, parseHandoff, agentPrompt, cliArgs, replyContext, decodeEvent, providers} from './lib/core.mjs';
+import {discover,discoverPage,discoverySnapshot} from './lib/discovery.mjs';
 const discoveredById=new Map();
+const discoverySnapshots=new Map();
 import {CodexSubmitListener,nextDesktop,openInCodex,openCodexBrainstorm} from './lib/desktop.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
 const {version}=JSON.parse(readFileSync(path.join(root,'package.json'),'utf8'));
 const storage=process.env.SWITCHBOARD_DATA_DIR || path.join(root,'.local');
 mkdirSync(storage,{recursive:true,mode:0o700});
+const releaseWorkspace=lockWorkspace(storage);
+process.once('exit',()=>{try{releaseWorkspace();}catch(error){console.error('Workspace lock cleanup:',error.message);}});
+const workspace=workspaceIdentity(storage);
 const stateFile=path.join(storage,'workspace.json');
 let state={chats:[],ideas:[]};
-if (existsSync(stateFile)) {try{state=JSON.parse(readFileSync(stateFile,'utf8'));}catch{throw new Error('Workspace data could not be read. Preserve .local/workspace.json before repairing it.');}}
+if (existsSync(stateFile)) {
+  try {
+    state=JSON.parse(readFileSync(stateFile,'utf8'));
+    if(!Array.isArray(state?.chats)||!Array.isArray(state?.ideas))throw Error('Invalid workspace.');
+  } catch {
+    throw Error(`Workspace data at ${stateFile} could not be read. Keep a copy before repairing it.`);
+  }
+}
 state.usage ||= {};
 state.desktop ||= {enabled:false,queue:state.chats.filter(c=>c.sourceId?.startsWith('codex:')).map(c=>c.sourceId),monitorAll:true,emptyBehavior:'brainstorm',history:[]};
 const clients=new Set(), jobs=new Map(), authJobs=new Map(), authErrors=new Map();
@@ -29,7 +41,7 @@ const token=randomBytes(32).toString('hex');
 const port=Number(process.env.PORT || 4317);
 const commandEnv={...process.env,PATH:[path.dirname(process.execPath),process.env.PATH || ''].join(path.delimiter)};
 const binaries={};
-let connections={}, discovered=[], discoveryAt=0, persistenceTimer;
+let connections={}, discovered=[], discoveryAt=0, persistenceTimer, storageError='';
 let nativeSources=[],nativeSourcesAt=0,nativeError=null,listenerState='paused',handoffChain=Promise.resolve();
 const nativeStatuses=new Map(),seenNativeEvents=new Set(),listener=new CodexSubmitListener();
 function desktopState(){return {...state.desktop,listenerState,error:nativeError,statuses:Object.fromEntries(nativeStatuses),queueDetails:state.desktop.queue.map(id=>{const s=nativeSources.find(s=>s.id===id);return {id,title:s?.title||id,status:nativeStatuses.get(id)||s?.desktopStatus||'unknown',summary:s?.summary||''};}),platform:process.platform,support:{codex:process.platform==='darwin',claude:false}};}
@@ -57,11 +69,40 @@ listener.on('event',event=>{
     else nativeHistory({kind:'no-ready-chat',sourceId:event.id,turnId:event.turnId,detectedAt:event.at});
   }).catch(error=>{nativeError=error.message;nativeHistory({kind:'error',sourceId:event.id,message:error.message});});
 });
-function save(){clearTimeout(persistenceTimer);const tmp=stateFile+'.tmp';writeFileSync(tmp,JSON.stringify(state,null,2),{mode:0o600});renameSync(tmp,stateFile);}
-function publicChats(){return state.chats.map(({watch,turns,sendReceipts,...chat})=>({...chat,status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,requirements,...t})=>t)}));}
+function save(snapshot=state){
+  const tmp=stateFile+'.tmp';
+  try {
+    writeFileSync(tmp,JSON.stringify(snapshot,null,2),{mode:0o600});
+    renameSync(tmp,stateFile);
+    clearTimeout(persistenceTimer);
+    storageError='';
+  } catch (error) {
+    storageError='Could not save this workspace. Check the data folder and available disk space.';
+    console.error('Workspace save:',error.message);
+    throw Object.assign(Error(storageError),{status:503});
+  }
+}
+function saveBackground(){
+  try{save();}catch{publish();}
+}
+function persistChat(chat,next){
+  try{save({...state,chats:state.chats.map(c=>c===chat?next:c)});}
+  catch(error){publish();throw error;}
+  Object.assign(chat,next);
+  publish();
+}
+function publicChats(){return state.chats.map(({watch,turns,sendReceipts,lastRequestId,messages,...chat})=>({...chat,messages:messages.map(({requestId,...message})=>message),status:attentionStatus({...chat,watch,turns}),watch:watch?{enabled:watch.enabled,provider:watch.provider,phase:watch.phase,error:watch.error}:undefined,turns:turns?.map(({facts,earlier,requirements,...t})=>t)}));}
 function recordResponse(provider){(state.lastResponses||={})[provider]=Date.now();if(connections[provider])connections[provider].lastResponse=state.lastResponses[provider];}
-function publish(){const data=JSON.stringify({chats:publicChats(),ideas:state.ideas,usage:state.usage,connections,desktop:desktopState()});for(const res of clients)if(!res.writableEnded)res.write(`data: ${data}\n\n`);}
-function update({immediate=false}={}){publish();if(immediate)save();else{clearTimeout(persistenceTimer);persistenceTimer=setTimeout(save,150);}}
+function publish(){const data=JSON.stringify({chats:publicChats(),ideas:state.ideas,usage:state.usage,connections,desktop:desktopState(),storageError,workspace});for(const res of clients)if(!res.writableEnded)res.write(`data: ${data}\n\n`);}
+function update({immediate=false,background=false}={}){
+  if(immediate){
+    try{save();}catch(error){publish();if(!background)throw error;return;}
+  }else{
+    clearTimeout(persistenceTimer);
+    persistenceTimer=setTimeout(saveBackground,150);
+  }
+  publish();
+}
 for (const chat of state.chats) if (chat.status==='running' || chat.status==='stopping') {chat.status='ready';chat.error='The app closed during this turn. Review any partial output before continuing.';chat.readyAt=Date.now();}
 async function checkConnections(){
   await Promise.all(providers.map(provider=>new Promise(resolve=>{
@@ -84,33 +125,71 @@ function requiredChat(id){const c=state.chats.find(c=>c.id===id);if(!c)throw Obj
 function validProvider(p){if(!providers.includes(p))throw new Error('Choose Codex or Claude.');return p;}
 function validCwd(cwd){if(typeof cwd!=='string'||!path.isAbsolute(cwd)||!existsSync(cwd)||!statSync(cwd).isDirectory())throw new Error('Choose an existing project folder using its full path.');return cwd;}
 function string(value,max=2000){if(typeof value!=='string')throw new Error('Expected text.');return value.trim().slice(0,max);}
+function updatedProject(chat,data){
+  const next={...chat};
+  if(data.provider!==undefined)next.provider=validProvider(data.provider);
+  if(data.permission!==undefined){
+    if(!['read','edit'].includes(data.permission))throw Error('Unknown access mode.');
+    next.permission=data.permission;
+  }
+  if(data.decision)next.confirmedDecisions=[...(chat.confirmedDecisions||[]),string(data.decision)];
+  if(data.requirements!==undefined)next.requirements=string(data.requirements,6000);
+  if(data.goal!==undefined)next.goal=string(data.goal);
+  if(data.priority!==undefined)next.priority=data.priority===1?1:0;
+  if(data.status==='ready'){next.status='ready';next.readyAt=Date.now();}
+  return next;
+}
 function newChat(data){return {id:randomUUID(),title:data.title,goal:data.goal||'',cwd:data.cwd||root,provider:data.provider||'codex',permission:'read',status:'ready',readyAt:Date.now(),priority:0,summary:data.summary||'Set the direction for this project. Your first prompt will start the conversation.',decisions:[],nextAction:'What would you like to work on?',messages:data.messages||[],sessions:{},...data};}
 function stopJob(chatId,job) {
   killGroup(job.child);
   const timer=setTimeout(()=>{if(jobs.get(chatId)===job)killGroup(job.child,'SIGKILL');},3000);
   timer.unref();
 }
+function foldersOverlap(first,second){
+  const within=(parent,child)=>{
+    const relative=path.relative(parent,child);
+    return relative!=='..' && !relative.startsWith('..'+path.sep) && !path.isAbsolute(relative);
+  };
+  return within(first,second)||within(second,first);
+}
 function run(chat,text,requestId,turnId,routeProvider){
+  const previous=chat.messages.find(m=>m.requestId===requestId);
+  if(previous){
+    if(previous.text!==text || (routeProvider!==undefined && previous.provider!==routeProvider) || (turnId!==undefined && previous.replyTo!==turnId)) {
+      throw Object.assign(Error('This send ID belongs to a different reply.'),{status:409});
+    }
+    return {nextId:nextAttention(state.chats,chat.id),duplicate:true};
+  }
   if(chat.lastRequestId===requestId||chat.sendReceipts?.includes(requestId))return {nextId:nextAttention(state.chats,chat.id),duplicate:true};
   if(['running','stopping'].includes(chat.status))throw Object.assign(new Error('This chat is already working.'),{status:409});
   if(jobs.size>=3)throw Object.assign(new Error('Three chats are already working. Wait for one to finish.'),{status:429});
   const provider=validProvider(routeProvider||chat.provider);
   if(!chat.demo && !connections[provider]?.signedIn)throw new Error(`Sign into ${provider==='codex'?'Codex':'Claude'} in Connections first.`);
   const folder=realpathSync(validCwd(chat.cwd));
-  if(!chat.demo && [...jobs.values()].some(job=>job.folder===folder && (job.edit || chat.permission==='edit'))){
-    throw Object.assign(new Error('A Switchboard turn is already using this folder. Wait for it to finish before running turns with file edits.'),{status:409});
+  if(!chat.demo && [...jobs.values()].some(job=>job.folder && foldersOverlap(job.folder,folder) && (job.edit || chat.permission==='edit'))){
+    throw Object.assign(new Error('A Switchboard turn is already using this folder or an overlapping folder. Wait before running turns with file edits.'),{status:409});
   }
   const anchor=turnId===undefined?chat.displayTurn:turnId;
   const turn=anchor == null ? null : chat.turns?.find(t=>t.id===anchor);
   if(anchor != null && !turn)throw new Error('The result this draft answers is unavailable. Clear the draft to start a new reply.');
-  const prompt=agentPrompt(chat,text,provider,turn);
-  // Spawn before mutating the project so a synchronous OS error preserves the draft.
-  let child;if(!chat.demo)try{child=spawnCli(binaries[provider],cliArgs(provider,chat),{cwd:chat.cwd,env:commandEnv,detached:true,stdio:['pipe','pipe','pipe']});}catch{throw new Error(`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and refresh Connections.`);}
-  chat.messages.push({id:randomUUID(),role:'user',provider,text,at:Date.now(),replyTo:turn?.id??null});
-  if(chat.unseenWatchedTurn===turn?.id)delete chat.unseenWatchedTurn;
-  chat.sendReceipts=[...(chat.sendReceipts||[chat.lastRequestId].filter(Boolean)),requestId].slice(-32);
-  chat.provider=provider;chat.lastRequestId=requestId;chat.error=null;delete chat.permissionNotice;chat.status='running';chat.activity='Starting your agent';chat.liveText='';chat.startedAt=Date.now();update({immediate:true});
+  const context=replyContext(chat,provider,turn);
+  const prompt=agentPrompt(context,text,provider,turn);
+  const at=Date.now();
+  // Save the accepted request before starting a process. If saving fails,
+  // leave this project unchanged so the exact same request can be retried.
+  const nextMessages=[...chat.messages,{id:randomUUID(),role:'user',provider,text,at,replyTo:turn?.id??null,requestId}];
+  persistChat(chat,{
+    ...chat,messages:nextMessages,provider,error:null,permissionNotice:undefined,status:'running',
+    activity:'Starting your agent',liveText:'',startedAt:at,
+    unseenWatchedTurn:chat.unseenWatchedTurn===turn?.id?undefined:chat.unseenWatchedTurn
+  });
   if(chat.demo){const timer=setTimeout(()=>{jobs.delete(chat.id);complete(chat,`Here is a direction we can build on: ${text}\n\nThis is a simulated response so you can try the handoff.\n\n<<<SWITCHBOARD_HANDOFF>>>${JSON.stringify({summary:'The demo agent finished. Your project is ready for another decision.',decisions:[],next_action:'Try another prompt or mark this chat caught up.'})}`);},2800);jobs.set(chat.id,{demo:true,timer});return {nextId:nextAttention(state.chats,chat.id)};}
+  let child;
+  try{child=spawnCli(binaries[provider],cliArgs(provider,context),{cwd:chat.cwd,env:commandEnv,detached:true,stdio:['pipe','pipe','pipe']});}
+  catch{
+    complete(chat,'',`Could not start ${provider==='codex'?'Codex CLI':'Claude Code'}. Check its installation and refresh Connections.`);
+    return {nextId:nextAttention(state.chats,chat.id)};
+  }
   const job={child,folder,edit:chat.permission==='edit',stopped:false,settled:false,facts:[]};jobs.set(chat.id,job);
   let buffer='',stderr='',messages=[],failure='',final='',sessionCandidate='';
   const timeout=setTimeout(()=>{failure='This turn reached the 20-minute limit. Review partial output and send a continuation.';stopJob(chat.id,job);},20*60*1000);
@@ -124,6 +203,8 @@ function run(chat,text,requestId,turnId,routeProvider){
     if(e.denials?.length)chat.permissionNotice='Some tools were unavailable in this project’s current access mode.';
     update();
   }
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
   child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){event(buffer.slice(0,index));buffer=buffer.slice(index+1);}if(buffer.length>2000000){failure='Agent output exceeded the event size limit.';killGroup(child);}});
   child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-10000);});
   function settle(code,error){if(job.settled)return;job.settled=true;clearTimeout(timeout);jobs.delete(chat.id);if(buffer.trim())event(buffer);
@@ -142,12 +223,18 @@ function complete(chat,answer,error,facts=[],phase=error?'failed':'finished'){
   const request=chat.messages.findLast(m=>m.role==='user');
   const turn={id:randomUUID(),origin:'managed',provider:chat.provider,at:Date.now(),phase,answer:handoff.text,request:request?.text||'',replyTo:request?.replyTo??null,facts,earlier:[]};
   addEvidence(facts,note('message','Agent response',turn.answer));
-  try{if(error)throw Error();turn.card=makeCard(resultPayload(answer),turn);turn.analysis='ready';}catch{turn.card=rawCard(turn);turn.analysis='raw';}
+  try{if(error)throw Error();turn.card=makeCard(resultPayload(answer),turn);turn.analysis='ready';}
+  catch{
+    turn.answer=answer;
+    turn.card=rawCard(turn);
+    turn.analysis='raw';
+    if(!error)turn.analysisError='The decision could not be verified from this handoff. Review the original response.';
+  }
   (chat.turns||=[]).push(turn);chat.displayTurn=turn.id;
   if(!error && !chat.demo)recordResponse(chat.provider);
-  if(handoff.text)chat.messages.push({id:randomUUID(),role:'assistant',provider:chat.provider,text:handoff.text,at:Date.now()});
+  if(turn.answer)chat.messages.push({id:randomUUID(),role:'assistant',provider:chat.provider,text:turn.answer,at:Date.now()});
   if(answer && !error){chat.summary=handoff.summary;chat.nextAction=handoff.nextAction;}
-  chat.status='ready';chat.readyAt=Date.now();chat.liveText='';chat.activity='';chat.error=error||null;update({immediate:true});}
+  chat.status='ready';chat.readyAt=Date.now();chat.liveText='';chat.activity='';chat.error=error||null;update({immediate:true,background:true});}
 async function login(provider){validProvider(provider);if(!binaries[provider])throw new Error(`Install ${provider==='codex'?'Codex CLI':'Claude Code'} first.`);if(authJobs.has(provider))return;
   authErrors.delete(provider);
   const child=spawnCli(binaries[provider],provider==='codex'?['login','--device-auth']:['auth','login'],{env:commandEnv,stdio:['pipe','pipe','pipe'],detached:true});
@@ -161,7 +248,20 @@ async function login(provider){validProvider(provider);if(!binaries[provider])th
   child.on('error',error=>finish(null,error));child.on('close',code=>finish(code));await checkConnections();
 }
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
-async function body(req){let data='';for await(const b of req){data+=b;if(data.length>100000)throw new Error('Request is too large.');}try{return JSON.parse(data||'{}');}catch{throw new Error('Invalid JSON.');}}
+async function body(req){
+  req.setEncoding('utf8');
+  let data='',size=0;
+  for await(const chunk of req){
+    size+=Buffer.byteLength(chunk);
+    if(size>400000)throw Object.assign(Error('Request is too large.'),{status:413});
+    data+=chunk;
+  }
+  try {
+    const value=JSON.parse(data||'{}');
+    if(!value || typeof value!=='object' || Array.isArray(value))throw Error();
+    return value;
+  } catch {throw Error('Expected a JSON object.');}
+}
 const server=http.createServer(async(req,res)=>{
   try{
     const host=req.headers.host;
@@ -169,17 +269,26 @@ const server=http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
     const url=new URL(req.url,`http://${host}`), route=url.pathname;
     if(req.method!=='GET' && (req.headers['x-switchboard-token']!==token || (req.headers.origin && ![`http://127.0.0.1:${port}`,`http://localhost:${port}`].includes(req.headers.origin)))){send(res,403,{error:'Refresh Switchboard before continuing.'});return;}
-    if(route==='/api/health' && req.method==='GET'){send(res,200,{app:'switchboard',version});return;}
-    if(route==='/api/bootstrap' && req.method==='GET'){send(res,200,{...state,chats:publicChats(),connections,desktop:desktopState(),token,root});return;}
+    if(route==='/api/health' && req.method==='GET'){send(res,200,{app:'switchboard',version,workspace});return;}
+    if(route==='/api/bootstrap' && req.method==='GET'){send(res,200,{...state,chats:publicChats(),connections,desktop:desktopState(),token,root,workspace,storageError});return;}
     if(route==='/api/desktop' && req.method==='GET'){await nativeDiscovery(url.searchParams.has('refresh'));send(res,200,{...desktopState(),sources:nativeSources});return;}
     if(route==='/api/discover' && req.method==='GET'){
       const offset=Number(url.searchParams.get('offset')||0);
       if(!Number.isSafeInteger(offset)||offset<0)throw new Error('Invalid history offset.');
-      const page=await discoverPage({offset});
+      const requested=url.searchParams.get('snapshot');
+      const snapshotId=requested||randomUUID();
+      let snapshot=discoverySnapshots.get(snapshotId);
+      if(requested&&!snapshot)throw Object.assign(Error('This chat list expired. Close it and reopen Find existing projects.'),{status:410});
+      if(!snapshot){
+        snapshot=await discoverySnapshot();
+        discoverySnapshots.set(snapshotId,snapshot);
+        if(discoverySnapshots.size>16)discoverySnapshots.delete(discoverySnapshots.keys().next().value);
+      }
+      const page=await discoverPage({offset,snapshot});
       for(const p of page.projects)discoveredById.set(p.id,p);
-      send(res,200,{nextOffset:page.nextOffset,projects:page.projects.filter(p=>!state.chats.some(c=>Object.values(c.sessions||{}).includes(p.sourceSession))).map(({messages,transcriptPath,...p})=>p)});return;
+      send(res,200,{snapshotId,nextOffset:page.nextOffset,projects:page.projects.filter(p=>!state.chats.some(c=>Object.values(c.sessions||{}).includes(p.sourceSession))).map(({messages,transcriptPath,...p})=>p)});return;
     }
-    if(route==='/api/events' && req.method==='GET'){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});clients.add(res);res.write(`data: ${JSON.stringify({...state,chats:publicChats(),connections,desktop:desktopState()})}\n\n`);const heartbeat=setInterval(()=>res.write(': heartbeat\n\n'),15000);req.on('close',()=>{clients.delete(res);clearInterval(heartbeat);});return;}
+    if(route==='/api/events' && req.method==='GET'){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});clients.add(res);res.write(`data: ${JSON.stringify({...state,chats:publicChats(),connections,desktop:desktopState(),storageError,workspace})}\n\n`);const heartbeat=setInterval(()=>res.write(': heartbeat\n\n'),15000);req.on('close',()=>{clients.delete(res);clearInterval(heartbeat);});return;}
     if(req.method==='POST'){
       const data=await body(req);
       if(route==='/api/desktop/config'){
@@ -230,10 +339,18 @@ const server=http.createServer(async(req,res)=>{
       if(match){const chat=requiredChat(match[1]);const action=match[2];
         if(action==='pause-watch'){monitor.pause(chat);send(res,200,{ok:true});return;}
         if(action==='analyze'){const t=chat.turns?.find(t=>t.id===data.turnId);if(!chat.watch?.enabled||t?.origin!=='watched'||t.phase!=='finished')throw new Error('Follow this chat to analyze its completed turn.');if(t.analysis!=='analyzing'){t.analysis='queued';monitor.schedule();update({immediate:true});}send(res,202,{ok:true});return;}
-        if(action==='send'){const text=string(data.text,50000);if(!text)throw new Error('Write a prompt first.');send(res,202,run(chat,text,string(data.requestId||randomUUID(),100),data.turnId,data.provider));return;}
+        if(action==='send'){
+          if(typeof data.text!=='string' || !data.text.trim())throw Error('Write a prompt first.');
+          const text=data.text.trim();
+          if(text.length>50000)throw Object.assign(Error('Your reply is over 50,000 characters. Shorten it and try again.'),{status:413});
+          send(res,202,run(chat,text,string(data.requestId||randomUUID(),100),data.turnId,data.provider));return;
+        }
         if(action==='stop'){const job=jobs.get(chat.id);if(job?.demo){clearTimeout(job.timer);jobs.delete(chat.id);complete(chat,'','You stopped this demo turn.',[],'interrupted');}else if(job){job.stopped=true;chat.status='stopping';stopJob(chat.id,job);update();}send(res,200,{ok:true});return;}
         if(['running','stopping'].includes(chat.status))throw new Error('Stop this turn before changing the project.');
-        if(action==='update'){if(data.provider)chat.provider=validProvider(data.provider);if(data.permission){if(!['read','edit'].includes(data.permission))throw new Error('Unknown access mode.');chat.permission=data.permission;}if(data.decision){(chat.confirmedDecisions||=[]).push(string(data.decision));}if(data.requirements!==undefined)chat.requirements=string(data.requirements,6000);if(data.goal!==undefined)chat.goal=string(data.goal);if(data.priority!==undefined)chat.priority=data.priority===1?1:0;if(data.status==='ready'){chat.status='ready';chat.readyAt=Date.now();}}
+        if(action==='update'){
+          persistChat(chat,updatedProject(chat,data));
+          send(res,200,{nextId:nextAttention(state.chats,chat.id)});return;
+        }
         if(action==='reset-session'){delete chat.sessions[validProvider(chat.provider)];chat.error=null;}
         if(action==='park'){chat.status='parked';delete chat.unseenWatchedTurn;}
         if(action==='delete'){monitor.pause(chat);state.chats=state.chats.filter(c=>c.id!==chat.id);}
@@ -241,16 +358,16 @@ const server=http.createServer(async(req,res)=>{
       }
       send(res,404,{error:'Unknown action.'});return;
     }
-    const assets={'/':'index.html','/app.js':'app.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
+    const assets={'/':'index.html','/app.js':'app.js','/drafts.js':'drafts.js','/styles.css':'styles.css','/desktop':'desktop.html','/desktop.js':'desktop.js','/desktop.css':'desktop.css'};
     if(req.method==='GET' && assets[route]){const types={'.html':'text/html','.js':'text/javascript','.css':'text/css'};res.writeHead(200,{'Content-Type':types[path.extname(assets[route])],'Cache-Control':'no-cache','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"});res.end(await readFile(path.join(root,'public',assets[route])));return;}
     send(res,404,{error:'Not found.'});
   }catch(error){send(res,error.status||400,{error:error.message});}
 });
-const monitor=createMonitor({state,storage,save,publish,binaries,env:commandEnv,isConnected:p=>connections[p]?.signedIn,onResponse:recordResponse});
+const monitor=createMonitor({state,storage,save:saveBackground,publish,binaries,env:commandEnv,isConnected:p=>connections[p]?.signedIn,onResponse:recordResponse});
 await checkConnections();
 if(state.desktop.enabled)try{await enableDesktop(true);}catch(e){state.desktop.enabled=false;nativeError=e.message;listenerState='error';save();}
 server.listen(port,'127.0.0.1',()=>console.log(`Switchboard is running at http://127.0.0.1:${port}\nWorkspace data: ${storage}`));
 server.on('error',error=>{console.error(error.message);process.exit(1);});
 let closing=false;
-function shutdown(){if(closing)return;closing=true;monitor.close();listener.stop();for(const job of jobs.values()){if(job.child)killGroup(job.child);if(job.timer)clearTimeout(job.timer);}for(const job of authJobs.values())killGroup(job.child);save();for(const res of clients)res.end();server.close();setTimeout(()=>process.exit(0),1000).unref();}
+function shutdown(){if(closing)return;closing=true;monitor.close();listener.stop();for(const job of jobs.values()){if(job.child)killGroup(job.child);if(job.timer)clearTimeout(job.timer);}for(const job of authJobs.values())killGroup(job.child);saveBackground();for(const res of clients)res.end();server.close();setTimeout(()=>process.exit(0),1000).unref();}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {nextAttention,parseHandoff,agentPrompt,cliArgs,decodeEvent} from '../lib/core.mjs';
+import {nextAttention,parseHandoff,agentPrompt,cliArgs,replyContext,decodeEvent} from '../lib/core.mjs';
 test('attention skips working and caught-up chats, favors priority, then oldest ready',()=>{
  const chats=[{id:'busy',status:'running',priority:1},{id:'old',status:'ready',readyAt:1},{id:'new',status:'ready',readyAt:2},{id:'priority',status:'ready',readyAt:3,priority:1},{id:'done',status:'parked'}];
  assert.equal(nextAttention(chats),'priority');assert.equal(nextAttention(chats,'priority'),'old');assert.equal(nextAttention(chats.map(c=>({...c,status:'running'}))),null);
@@ -20,4 +20,15 @@ test('provider errors and permission denials are exposed',()=>{
  assert.equal(decodeEvent('codex',{type:'turn.failed',error:{message:'Rate limit'}}).error,'Rate limit');
  assert.equal(decodeEvent('claude',{type:'result',is_error:true,errors:['Not signed in']}).error,'Not signed in');
  assert.equal(decodeEvent('claude',{type:'result',result:'Done',permission_denials:[{tool_name:'Bash'}]}).denials.length,1);
+});
+test('replying to an older result avoids resuming a provider session with newer work',()=>{
+ const earlier={id:'old',provider:'codex',origin:'managed',at:10,card:{summary:'Choose CSV or JSON.'}};
+ const later={id:'new',provider:'codex',origin:'managed',at:20,card:{summary:'Discard the export.'}};
+ const chat={sessions:{codex:'latest-session'},turns:[earlier,later],messages:[
+  {role:'assistant',provider:'codex',at:20,text:'Discard the export.'}
+ ]};
+ const older=replyContext(chat,'codex',earlier);
+ assert.ok(!cliArgs('codex',older).includes('resume'));
+ assert.ok(!agentPrompt(older,'Choose JSON','codex',earlier).includes('Discard the export.'));
+ assert.ok(cliArgs('codex',replyContext(chat,'codex',later)).includes('resume'));
 });

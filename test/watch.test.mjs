@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {newWatch,pollTranscript,observeHook,note} from '../lib/turns.mjs';
 import {makeCard,rawCard} from '../lib/handoffs.mjs';
-import {agentPrompt} from '../lib/core.mjs';
+import {agentPrompt,attentionStatus} from '../lib/core.mjs';
 import {setClaudeHooks,drainHooks} from '../lib/hooks.mjs';
 import {findBinary} from '../lib/providers.mjs';
 import {createMonitor} from '../lib/monitor.mjs';
@@ -54,6 +54,10 @@ test('watch keeps the reply provider and catches up all paused turns and same-si
     await rename(replacement,file);
     await monitor.poll();
     assert.deepEqual(chat.turns.map(t=>t.id),['a','b','c','d','e','f']);
+    await appendFile(file,jsonl([lifecycle('task_complete','f',{last_agent_message:'Corrected result'})]));
+    await monitor.poll();
+    assert.equal(chat.turns[5].answer,'Corrected result');
+    assert.equal(chat.messages[5].text,'Corrected result');
   } finally {
     monitor.close();
     await rm(dir,{recursive:true,force:true});
@@ -67,7 +71,19 @@ test('evidence links resolve to actual records and a cross-provider reply retain
   const prompt=agentPrompt({messages:[],decisions:['Use UTF-8']},'take the second option','claude',turn);
   for(const s of ['12 tests passed','Must retain nested fields','Use UTF-8','Flattens nested data','Preserves nested data','take the second option'])assert.ok(prompt.includes(s));
   assert.ok(prompt.indexOf('CSV')<prompt.indexOf('JSON'));
-  assert.deepEqual(makeCard({summary:'Done',decision:null,options:[{label:'invent option',tradeoff:'none'}]},turn).options,[]);
+  assert.throws(()=>makeCard({summary:'Done',decision:null,options:[{label:'Invented',tradeoff:'None'}]},turn),/options without a decision/);
+});
+test('only a well-formed explicit no-decision moves a project out of the attention queue',()=>{
+  const turn={id:'result',analysis:'ready',facts:[]};
+  const chat={status:'ready',displayTurn:turn.id,turns:[turn]};
+  turn.card=makeCard({summary:'Done',decision:null,options:[]},turn);
+  assert.equal(attentionStatus(chat),'parked');
+  for(const decision of [{question:'Which format?'},'',false,undefined]){
+    const payload={summary:'Pick which format',decision,options:[{label:'JSON',tradeoff:'Keeps nesting'}]};
+    assert.throws(()=>makeCard(payload,turn),/decision could not be read/i);
+  }
+  turn.card={decision:null};
+  assert.equal(attentionStatus(chat),'ready','cards from the older build need review');
 });
 test('older result carries original instructions even when evidence is full or analysis fails',()=>{
   const prior=note('user','Earlier instruction','Never publish the fixture dataset');
@@ -96,6 +112,11 @@ test('Claude hooks are scoped, persist offline, preserve unrelated settings and 
     assert.equal(observeHook(w,event).id,'prior');assert.equal(w.phase,'working');
     w.previous[0].phase='interrupted';
     assert.equal(observeHook(w,event),undefined);
+    const failure={...event,hook_event_name:'StopFailure',error:'Late failure'};
+    w.previous[0].phase='finished';
+    assert.equal(observeHook(w,failure),undefined);
+    w.previous[0].provisional=true;
+    assert.equal(observeHook(w,failure).phase,'failed');
     setClaudeHooks(tmp,[]);assert.deepEqual(JSON.parse(await readFile(path.join(config,'settings.json'))),settings);
   }finally{if(prev===undefined)delete process.env.CLAUDE_CONFIG_DIR;else process.env.CLAUDE_CONFIG_DIR=prev;await rm(tmp,{recursive:true,force:true});}
 });

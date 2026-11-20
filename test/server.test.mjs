@@ -2,7 +2,7 @@ import {availablePort} from '../scripts/available-port.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,rename,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -36,6 +36,26 @@ test('accepted send returns the next chat immediately, rejects duplicate launche
   const invalid=await post('/api/usage',{provider:'codex',used:101,resetAt:''});assert.equal(invalid.status,400);
   const saved=await post('/api/usage',{provider:'codex',used:65,resetAt:'2030-01-01T12:00:00.000Z'});assert.equal(saved.status,200);assert.equal(saved.json.usage.codex.used,65);
   await post('/api/ideas',{text:'A calendar that understands context'});await stop();await start();bootstrap=await (await fetch(url+'/api/bootstrap')).json();token=bootstrap.token;assert.equal(bootstrap.ideas[0].text,'A calendar that understands context');assert.equal(bootstrap.chats.length,3);assert.equal(bootstrap.usage.codex.used,65);assert.equal(bootstrap.usage.codex.resetAt,'2030-01-01T12:00:00.000Z');const cleared=await post('/api/usage',{provider:'codex',clear:true});assert.equal(cleared.json.usage.codex,undefined);
+  const replay=await post(`/api/chats/${first.id}/send`,{text:'Try this direction',requestId:'one'});
+  assert.equal(replay.json.duplicate,true);
+  assert.equal((await post(`/api/chats/${first.id}/send`,{text:'Different reply',requestId:'one'})).status,409);
+  assert.equal((await post(`/api/chats/${first.id}/send`,{text:'x'.repeat(50001)})).status,413);
+  assert.equal((await post(`/api/chats/${first.id}/update`,{provider:'claude',permission:'invalid'})).status,400);
+  assert.equal((await (await fetch(url+'/api/bootstrap')).json()).chats[0].provider,'codex');
+  const file=path.join(data,'workspace.json');
+  await rename(file,file+'.saved');
+  await mkdir(file);
+  try {
+    const failed=await post(`/api/chats/${first.id}/send`,{text:'Send after saving works',requestId:'disk'});
+    assert.equal(failed.status,503);
+    const c=(await (await fetch(url+'/api/bootstrap')).json()).chats[0];
+    assert.equal(c.status,'ready');
+    assert.equal(c.messages.filter(m=>m.role==='user').length,2);
+  } finally {
+    await rm(file,{recursive:true});
+    await rename(file+'.saved',file);
+  }
+  assert.equal((await post(`/api/chats/${first.id}/send`,{text:'Send after saving works',requestId:'disk'})).status,202);
   await post('/api/demo/clear',{});bootstrap=await (await fetch(url+'/api/bootstrap')).json();assert.equal(bootstrap.chats.length,0);
  }finally{if(child?.exitCode===null)await stop();await rm(data,{recursive:true,force:true});}
 });
